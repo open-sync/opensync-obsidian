@@ -12,7 +12,9 @@ import {
 import {
   endpointsFor,
   generateAccountKey,
+  drawInvitation,
   grantAccount,
+  Invitation,
   joinAccount,
   Namespace,
   PairingCode,
@@ -602,8 +604,28 @@ class OpenSyncSettingTab extends PluginSettingTab {
             try {
               await ready();
               const code = PairingCode.generate();
-              status.createEl("p", { text: `Type this on the other device: ${code.text}` });
-              status.createEl("p", { text: `Its relay address is ${settings.relayWs}` });
+              const invitation = new Invitation(settings.relayWs, code);
+
+              // The QR first, because it carries the relay address — which is
+              // the half people mistype — and because a phone is the device
+              // most likely to be joining and the worst one to type on.
+              const canvas = status.createEl("canvas");
+              canvas.style.imageRendering = "pixelated";
+              canvas.style.margin = "0.5em 0";
+              drawInvitation(canvas, invitation, { moduleSize: 6 });
+
+              status.createEl("p", { text: "Scan that, or type both of these:" });
+              status.createEl("p", { text: `code   ${code.text}` });
+              status.createEl("p", { text: `relay  ${settings.relayWs}` });
+              if (/127\.0\.0\.1|localhost/.test(settings.relayWs)) {
+                // The commonest pairing failure by a distance, and it reads as
+                // a broken code rather than an unreachable address.
+                status.createEl("p", {
+                  text:
+                    "That relay address means \"this machine\", so another device cannot reach it. " +
+                    "Put this machine's LAN address in the relay setting first.",
+                });
+              }
               const line = status.createEl("p", { text: "Waiting for it to answer…" });
               await grantAccount(
                 settings.relayWs,
