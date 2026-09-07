@@ -1,0 +1,10 @@
+{
+  "id": "opensync",
+  "name": "OpenSync",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Free, end-to-end encrypted vault sync. Unlimited markdown, no subscription, and you can point it at your own server.",
+  "author": "OpenApps",
+  "authorUrl": "https://github.com/openapps/opensync",
+  "isDesktopOnly": false
+}

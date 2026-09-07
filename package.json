@@ -1,0 +1,21 @@
+{
+  "name": "opensync-obsidian",
+  "version": "0.1.0",
+  "description": "Free, end-to-end encrypted sync for Obsidian vaults.",
+  "main": "main.js",
+  "scripts": {
+    "wasm": "npm --prefix ../../packages/client run wasm",
+    "build": "npm run wasm && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0"
+  },
+  "//": "The client library is imported by relative path and bundled by esbuild; it is not published."
+}
