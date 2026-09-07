@@ -210,6 +210,90 @@ export default class OpenSyncPlugin extends Plugin {
     }
   }
 
+  /**
+   * Re-seal the whole vault under a fresh key.
+   *
+   * The only meaningful delete this protocol has: afterwards every blob left
+   * on the relay is ciphertext under a key nobody holds. Deletion itself is
+   * advisory — the relay may ignore it, and a blob that was ever fetched was
+   * ever copied — so rotating is what makes "delete my data" mean something.
+   *
+   * Cheap here in a way it is not on the native side, and for one reason: the
+   * vault on disk is the source of truth. There is nothing to download and
+   * re-encrypt. Point the plugin at a new key, forget the pointer and the
+   * merge base, and the next sync writes the whole vault out again as if this
+   * device had never synced.
+   *
+   * There is deliberately no announcement. Publishing the new key sealed
+   * under the old one would be convenient and would defeat the point: a
+   * device you are rotating away from holds the old key, so it would read the
+   * notice and follow the vault forever. Every device you keep is paired
+   * again, ten characters each.
+   */
+  async rotate(onProgress: (line: string) => void): Promise<string> {
+    const ctx = this.ready();
+    if (!ctx) throw new Error("set a relay, an account key and a vault key first");
+    if (this.running) throw new Error("a sync is running — wait for it to finish");
+
+    // Collect what the old key addressed *before* anything changes, so it can
+    // be swept afterwards. Best effort: the sweep tidies, the rotation is what
+    // protects, and a relay that refuses must not fail the rotation.
+    const stranded = new Set<string>();
+    if (this.pointer) stranded.add(this.pointer.root);
+    for (const entry of Object.values(this.base?.entries ?? {})) {
+      for (const chunk of entry.chunks) stranded.add(chunk.blob);
+    }
+
+    this.running = true;
+    try {
+      const key = Namespace.generateKey();
+      onProgress("Re-sealing the vault…");
+
+      this.settings.namespaceKey = key;
+      // A new key means a new history. Keeping the old pointer would publish
+      // at a generation another device could never have seen, and keeping the
+      // old base would offer a merge against manifests nothing can now open.
+      this.pointer = null;
+      this.base = null;
+      this.ns = null;
+      await this.saveState();
+
+      const fresh = this.ready();
+      if (!fresh) throw new Error("the new key was refused");
+
+      // Publish without reading, which no other path here does. An ordinary
+      // sync reads the relay's pointer first and merges — but that pointer is
+      // still sealed under the key we just replaced, so opening it fails and
+      // the rotation would stop one step from the end, having already changed
+      // the key. There is nothing to merge with: this device is the only one
+      // that can read anything from here until the others are re-paired.
+      const files = await this.readVault();
+      fresh.ns.clear();
+      for (const [path, bytes] of files) fresh.ns.stage(path, bytes);
+      const commit: Commit = fresh.ns.commit(1n, BigInt(Math.floor(Date.now() / 1000)));
+      await this.publish(fresh.relay, commit);
+      this.base = fresh.ns.openManifest(
+        commit.blobs.find((b) => b.id === commit.root)!.bytes,
+      );
+      await this.saveState();
+      onProgress(`Published ${files.size} file${files.size === 1 ? "" : "s"} under the new key.`);
+
+      onProgress(`Sweeping ${stranded.size} blob${stranded.size === 1 ? "" : "s"} the old key addressed…`);
+      let swept = 0;
+      for (const id of stranded) {
+        if (await fresh.relay.deleteBlob(id)) swept += 1;
+      }
+      onProgress(
+        swept === stranded.size
+          ? `Swept all ${swept}.`
+          : `Swept ${swept} of ${stranded.size} — the rest stay on the relay as ciphertext nothing can read.`,
+      );
+      return key;
+    } finally {
+      this.running = false;
+    }
+  }
+
   async sync(interactive: boolean): Promise<void> {
     if (this.running) return;
     const ctx = this.ready();
@@ -550,6 +634,11 @@ class OpenSyncSettingTab extends PluginSettingTab {
     const enrolled = Boolean(settings.accountSecret && settings.namespaceKey);
     containerEl.createEl("h3", { text: enrolled ? "Your devices" : "Set up" });
     const status = containerEl.createEl("div", { cls: "opensync-pairing" });
+    // Rotation is irreversible and destroys access for every device that is
+    // not re-paired, so it takes two presses. Scoped to this render of the
+    // pane, which means closing settings and coming back is itself a way to
+    // change your mind.
+    let confirmed = false;
 
     if (!enrolled) {
       let typed = "";
@@ -647,6 +736,54 @@ class OpenSyncSettingTab extends PluginSettingTab {
               b.setDisabled(false);
             }
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Rotate the vault key")
+      .setDesc(
+        "Re-seals this vault under a new key, so everything on the relay under the old one becomes unreadable. " +
+          "This is the only real delete there is: a relay may ignore a deletion request, and anything ever " +
+          "fetched was ever copied. Every device you keep must be paired again afterwards — there is no " +
+          "announcement, because one that reached your devices would reach the device you are rotating away from.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Rotate").setWarning().onClick(async () => {
+          status.empty();
+
+          // One key covers every namespace on the account, and this plugin
+          // only re-seals its own. Saying so before the button is pressed
+          // rather than after is the difference between a warning and a
+          // post-mortem.
+          if (!confirmed) {
+            confirmed = true;
+            b.setButtonText("Rotate — press again");
+            status.createEl("p", {
+              text:
+                "This re-seals the vault only. If the same key also syncs a clipboard or a password store, " +
+                "rotate those from their own app first — this cannot reach them, and afterwards nothing can.",
+            });
+            status.createEl("p", {
+              text: "Every other device loses access until it is paired again. Press Rotate once more to go ahead.",
+            });
+            return;
+          }
+          confirmed = false;
+          b.setButtonText("Rotate").setDisabled(true);
+
+          try {
+            const key = await this.plugin.rotate((line) => status.createEl("p", { text: line }));
+            this.plugin.settings.namespaceKey = key;
+            await this.plugin.saveSettings();
+            status.createEl("p", {
+              text: "Done. Use \"Add a device\" to pair each device you are keeping.",
+            });
+            this.display();
+          } catch (e) {
+            status.createEl("p", { text: `Rotation stopped: ${message(e)}` });
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
       );
 
     new Setting(containerEl)
