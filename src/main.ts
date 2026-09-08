@@ -52,7 +52,9 @@ const DEFAULTS: OpenSyncSettings = {
   accountSecret: "",
   namespaceKey: "",
   namespace: "vault:main",
-  deviceLabel: "This device",
+  // Replaced at load with the vault's own name, which is the thing a person
+  // recognises. Left generic here because a default cannot reach the app.
+  deviceLabel: "",
   syncOnSave: true,
   syncAttachments: false,
   intervalSeconds: 120,
@@ -143,6 +145,12 @@ export default class OpenSyncPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const stored = (await this.loadData()) ?? {};
     this.settings = Object.assign({}, DEFAULTS, stored);
+    // The label ends up in the name of every conflict copy, so a default that
+    // is the same everywhere makes the copies useless: two devices both
+    // shipped "This device" and produced "note (conflict … from This
+    // device).md" on both sides of the fork. The vault's name is at least the
+    // name the person chose.
+    if (!this.settings.deviceLabel) this.settings.deviceLabel = this.app.vault.getName();
     this.pointer = stored._pointer ?? null;
     this.base = stored._base ?? null;
   }
@@ -512,6 +520,18 @@ function message(e: unknown): string {
 }
 
 class OpenSyncSettingTab extends PluginSettingTab {
+  /**
+   * What the pane should say once it has been rebuilt.
+   *
+   * A rotation ends by re-rendering, because the new key has to appear in its
+   * field — and re-rendering empties the box the rotation was reporting into.
+   * Everything it had to say went with it: how many files were re-sealed, how
+   * many stranded blobs were swept, and that every other device has to be
+   * paired again. On the one operation here that cannot be undone, the screen
+   * went blank and looked like nothing had happened.
+   */
+  private carry: string[] = [];
+
   constructor(app: App, private readonly plugin: OpenSyncPlugin) {
     super(app, plugin);
   }
@@ -519,6 +539,9 @@ class OpenSyncSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    // Scoped to this render: closing the settings pane and coming back is a
+    // way to change your mind about replacing a key.
+    let replacing = false;
 
     this.devicesSection(containerEl);
 
@@ -561,13 +584,21 @@ class OpenSyncSettingTab extends PluginSettingTab {
           }),
       )
       .addButton((b) =>
-        b.setButtonText("Generate").onClick(async () => {
-          if (
-            this.plugin.settings.namespaceKey &&
-            !confirm("Replace the existing vault key? Anything synced under the old key becomes unreadable.")
-          ) {
+        // Two presses when there is a key to lose, matching the Rotate button
+        // rather than asking `window.confirm`. On mobile that dialog is not
+        // guaranteed to appear at all, and a blocked one reads as a button
+        // that silently does nothing — on the control that decides whether a
+        // vault stays readable.
+        b.setButtonText(replacing ? "Generate — press again" : "Generate").onClick(async () => {
+          if (this.plugin.settings.namespaceKey && !replacing) {
+            replacing = true;
+            b.setButtonText("Generate — press again").setWarning();
+            new Notice(
+              "This replaces the vault key. Anything already synced under the old one becomes unreadable — press again to go ahead.",
+            );
             return;
           }
+          replacing = false;
           this.plugin.settings.namespaceKey = Namespace.generateKey();
           await this.plugin.saveSettings();
           this.display();
@@ -596,7 +627,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
       .setDesc("Shown in conflict copies, so you can tell which version came from where.")
       .addText((t) =>
         t.setValue(this.plugin.settings.deviceLabel).onChange(async (v) => {
-          this.plugin.settings.deviceLabel = v.trim() || "This device";
+          this.plugin.settings.deviceLabel = v.trim() || this.app.vault.getName();
           await this.plugin.saveSettings();
         }),
       );
@@ -632,8 +663,10 @@ class OpenSyncSettingTab extends PluginSettingTab {
   private devicesSection(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
     const enrolled = Boolean(settings.accountSecret && settings.namespaceKey);
-    containerEl.createEl("h3", { text: enrolled ? "Your devices" : "Set up" });
+    new Setting(containerEl).setName(enrolled ? "Your devices" : "Set up").setHeading();
     const status = containerEl.createEl("div", { cls: "opensync-pairing" });
+    for (const line of this.carry) status.createEl("p", { text: line });
+    this.carry = [];
     // Rotation is irreversible and destroys access for every device that is
     // not re-paired, so it takes two presses. Scoped to this render of the
     // pane, which means closing settings and coming back is itself a way to
@@ -645,9 +678,9 @@ class OpenSyncSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("Join from a code")
         .setDesc(
-          "On a device that already has this account, ask for a pairing code — `opensync pair`, or the Add a device button in its settings — and type the ten characters here. The keys are never shown and never typed.",
+          "On a device that already has this account, ask for a pairing code — `opensync pair`, or the Add a device button in its settings. Paste the whole opensync://pair… line it shows, or type the ten characters and fill in the relay address below. The keys are never shown and never typed.",
         )
-        .addText((t) => t.setPlaceholder("9x4k-tv2q8m").onChange((v) => (typed = v)))
+        .addText((t) => t.setPlaceholder("9x4k-tv2q8m, or opensync://pair…").onChange((v) => (typed = v)))
         .addButton((b) =>
           b
             .setButtonText("Join")
@@ -658,10 +691,29 @@ class OpenSyncSettingTab extends PluginSettingTab {
                 status.setText("Type the code from the other device first.");
                 return;
               }
-              status.setText(`Asking ${settings.relayWs} for that account…`);
+              // An invitation carries the relay with it, and wins over the
+              // field above: a device that has just been handed one is a
+              // device that was never told where the relay is, and a stale
+              // address left in the field is not what the person meant.
+              await ready();
+              let ws = settings.relayWs;
               try {
-                const granted = await joinAccount(settings.relayWs, typed);
-                const reachable = endpointsFor(settings.relayWs, granted);
+                ws = Invitation.parse(typed.trim()).relayWs;
+              } catch {
+                // Ten characters on their own. The relay has to come from
+                // somewhere, and on a fresh phone there is nothing there —
+                // which used to mean two minutes of asking nobody.
+              }
+              if (!ws) {
+                status.setText(
+                  "Fill in the relay address from the other device, or paste the whole opensync://pair… line it showed.",
+                );
+                return;
+              }
+              status.setText(`Asking ${ws} for that account…`);
+              try {
+                const granted = await joinAccount(ws, typed.trim());
+                const reachable = endpointsFor(ws, granted);
                 settings.accountSecret = granted.accountSecret;
                 settings.namespaceKey = granted.namespaceKey;
                 settings.namespace = granted.namespace;
@@ -698,12 +750,18 @@ class OpenSyncSettingTab extends PluginSettingTab {
               // The QR first, because it carries the relay address — which is
               // the half people mistype — and because a phone is the device
               // most likely to be joining and the worst one to type on.
-              const canvas = status.createEl("canvas");
-              canvas.style.imageRendering = "pixelated";
-              canvas.style.margin = "0.5em 0";
+              const canvas = status.createEl("canvas", { cls: "opensync-qr" });
               drawInvitation(canvas, invitation, { moduleSize: 6 });
 
-              status.createEl("p", { text: "Scan that, or type both of these:" });
+              // Three ways to carry the same thing, because the right one
+              // depends on what the joining device is. A phone scans. A second
+              // computer, which cannot point a camera at this screen, gets one
+              // line to copy. Anything else reads ten characters aloud — and
+              // then needs the relay address too, which is the half that gets
+              // mistyped.
+              status.createEl("p", { text: "Scan that, paste this line on the other device:" });
+              status.createEl("p", { text: invitation.uri, cls: "opensync-invite" });
+              status.createEl("p", { text: "…or type both of these:" });
               status.createEl("p", { text: `code   ${code.text}` });
               status.createEl("p", { text: `relay  ${settings.relayWs}` });
               if (/127\.0\.0\.1|localhost/.test(settings.relayWs)) {
@@ -770,13 +828,18 @@ class OpenSyncSettingTab extends PluginSettingTab {
           confirmed = false;
           b.setButtonText("Rotate").setDisabled(true);
 
+          const progress: string[] = [];
           try {
-            const key = await this.plugin.rotate((line) => status.createEl("p", { text: line }));
+            const key = await this.plugin.rotate((line) => {
+              progress.push(line);
+              status.createEl("p", { text: line });
+            });
             this.plugin.settings.namespaceKey = key;
             await this.plugin.saveSettings();
-            status.createEl("p", {
-              text: "Done. Use \"Add a device\" to pair each device you are keeping.",
-            });
+            // Handed to the next render rather than written here: `display()`
+            // is what puts the new key in its field, and it empties this box
+            // on the way.
+            this.carry = [...progress, 'Done. Use "Add a device" to pair each device you are keeping.'];
             this.display();
           } catch (e) {
             status.createEl("p", { text: `Rotation stopped: ${message(e)}` });
@@ -805,10 +868,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
             );
             // Shown in the settings pane rather than copied to the clipboard:
             // a clipboard is exactly where these two keys should not go.
-            const pre = status.createEl("pre", { text: page });
-            pre.style.whiteSpace = "pre";
-            pre.style.overflowX = "auto";
-            pre.style.userSelect = "text";
+            status.createEl("pre", { text: page, cls: "opensync-kit" });
             // Read it straight back, so the page is proved parseable before
             // anybody relies on it having been printed.
             const check = readRecoveryKit(page) as { fingerprint: string };

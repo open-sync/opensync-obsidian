@@ -1,0 +1,51 @@
+/*
+ * The settings pane, and nothing else. A plugin's stylesheet is loaded into
+ * the whole application, so every rule here is scoped to a class this plugin
+ * puts on an element itself.
+ *
+ * Colours come from Obsidian's own variables rather than being picked here:
+ * a plugin that hard-codes a background is a plugin that is unreadable in
+ * half the themes people use.
+ */
+
+.opensync-pairing {
+  margin: 0.75em 0 1.25em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.opensync-pairing p {
+  margin: 0.35em 0;
+}
+
+/* The pairing QR. Nearest-neighbour, because a scaled QR that has been
+ * smoothed is a QR a camera has to work harder to read. */
+.opensync-qr {
+  image-rendering: pixelated;
+  display: block;
+  margin: 0.5em 0;
+  border-radius: 4px;
+}
+
+/* The one line that carries the relay address and the code together. It is
+ * meant to be selected and copied, so it wraps rather than overflowing, and
+ * it is monospaced so an l and a 1 are not the same shape. */
+.opensync-invite {
+  font-family: var(--font-monospace);
+  color: var(--text-normal);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+/* The recovery kit, as it will be printed: fixed width, no wrapping, and
+ * selectable — the whole point of it is that it can be read back. */
+.opensync-kit {
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  background: var(--background-secondary);
+  padding: 0.75em;
+  border-radius: 4px;
+}

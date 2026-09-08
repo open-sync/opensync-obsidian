@@ -6,11 +6,13 @@
   "scripts": {
     "wasm": "npm --prefix ../opensync/packages/client run wasm",
     "build": "npm run wasm && node scripts/build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:obsidian": "node checks/obsidiancheck.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
     "obsidian": "^1.7.2",
+    "playwright-core": "^1.63.0",
     "typescript": "^5.6.0"
   },
   "dependencies": {
