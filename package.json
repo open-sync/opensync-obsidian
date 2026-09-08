@@ -4,7 +4,7 @@
   "description": "Free, end-to-end encrypted sync for Obsidian vaults.",
   "main": "main.js",
   "scripts": {
-    "wasm": "npm --prefix ../../packages/client run wasm",
+    "wasm": "npm --prefix ../opensync/packages/client run wasm",
     "build": "npm run wasm && node scripts/build.mjs",
     "typecheck": "tsc --noEmit"
   },

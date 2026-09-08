@@ -25,7 +25,7 @@ import {
   Relay,
   renderRecoveryKit,
   Signer,
-} from "../../../packages/client/src";
+} from "../../opensync/packages/client/src";
 
 interface OpenSyncSettings {
   relayWs: string;
