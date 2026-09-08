@@ -1,0 +1,18 @@
+   5s  Obsidian 1.13.7, relay ws://127.0.0.1:63692/
+   6s  01 the pane a new install shows — 1182 ms
+  10s  03 a vault, published — 1276 ms
+  12s  pairing code s2ya-2mrld3
+  16s  06 the joining device fetches the vault — 55 ms
+  18s  bootstrap 55 ms for 3 files
+  19s  conflict copy: Pairing (conflict 2026-09-08 from vaultB).md
+  28s  wrote 500 notes in 1044 ms, 504 files in the vault
+  32s  published 504 files in 2800 ms; the other device fetched them in 1466 ms
+  33s  10 the vault at scale, on the device it arrived at — 997 ms
+  35s  11 search across the synced vault — 1404 ms
+  36s  12 the same vault, dark — 1559 ms
+  38s  13 the pane, dark — 1935 ms
+  38s  close the pane — 121 ms
+  39s  back to light — 627 ms
+  40s  search the relay's own storage for plaintext — 46 ms
+  40s  relay holds 515 files, 4.7 MB, 0 plaintext hits (searched for 6 strings incl. canary-j5sj5frmqec-1788843415551)
+  40s  {"pair":2119,"bootstrap":55,"publish":2800,"fetch":1466,"files":504,"relay":{"files":515,"bytes":4973523,"hits":0,"searched":6,"token":"canary-j5sj5frmqec-1788843415551"}}

@@ -1,0 +1,14 @@
+{
+  "pair": 2119,
+  "bootstrap": 55,
+  "publish": 2800,
+  "fetch": 1466,
+  "files": 504,
+  "relay": {
+    "files": 515,
+    "bytes": 4973523,
+    "hits": 0,
+    "searched": 6,
+    "token": "canary-j5sj5frmqec-1788843415551"
+  }
+}

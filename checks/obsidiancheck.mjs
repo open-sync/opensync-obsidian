@@ -18,8 +18,8 @@ const keep = process.argv.includes("--keep");
 
 try {
   console.log(`relay ${env.relay.ws}`);
-  let A = await env.open("vaultA", 9333);
-  let B = await env.open("vaultB", 9334);
+  let A = await env.open("vaultA");
+  let B = await env.open("vaultB");
   console.log(`Obsidian ${await A.version()}, two vaults\n`);
 
   // ---- it loads at all -----------------------------------------------------

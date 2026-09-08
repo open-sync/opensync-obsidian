@@ -66,6 +66,18 @@ Two of the things this repository does differently were found by running it:
   default label, so both sides of a fork were named the same thing. The
   default is now the vault's own name.
 
+## Screenshots
+
+```sh
+npm run shots          # docs/screenshots, plus the log and the numbers
+```
+
+`checks/capture.mjs` photographs thirteen states of the running app — the same
+harness, driven to each state and asked to hold still. It also writes what it
+measured (`capture.json`) and, at the end, searches the relay's own storage for
+words from the notes, the vault paths, and a token generated for that run: a
+relay holding plaintext would be holding that exact string.
+
 ## What is covered
 
 Loading in Obsidian, the settings pane, generating keys, publishing a vault,

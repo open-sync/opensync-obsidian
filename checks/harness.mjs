@@ -139,18 +139,24 @@ async function launchObsidian(root, vault, name, port) {
   if (!browser) throw new Error(`${name}: Obsidian never opened a debugger on ${port}`);
 
   // The window that holds the app, not a popped-out settings window or a
-  // devtools page. Picking the first page finds the wrong one often enough.
+  // devtools page — and the window holding *this* vault. An Obsidian left
+  // over from an earlier run answers a debugger just as readily as the one
+  // just started, and a run that attached to one silently drove the wrong
+  // vault: five hundred notes that were already there, a publish that took
+  // 176 ms, and numbers that looked like a triumph.
   let page = null;
   while (Date.now() < deadline) {
     for (const candidate of browser.contexts().flatMap((c) => c.pages())) {
       if (!candidate.url().startsWith("app://obsidian.md")) continue;
-      const hasApp = await candidate.evaluate(() => Boolean(window.app?.vault)).catch(() => false);
-      if (hasApp) { page = candidate; break; }
+      const path = await candidate
+        .evaluate(() => window.app?.vault?.adapter?.basePath ?? null)
+        .catch(() => null);
+      if (path && path.replace(/^\/private/, "") === vault.replace(/^\/private/, "")) { page = candidate; break; }
     }
     if (page) break;
     await sleep(500);
   }
-  if (!page) throw new Error(`${name}: Obsidian started but never showed a vault window`);
+  if (!page) throw new Error(`${name}: nothing on port ${port} is showing ${vault}`);
   deadline = Date.now() + 60_000;
 
   // "Do you trust the author of this vault?" — the gate in front of every
@@ -217,8 +223,14 @@ function device(browser, page, child, profile, name) {
     write: (p, text) =>
       page.evaluate(async ([p, text]) => {
         const file = window.app.vault.getAbstractFileByPath(p);
-        if (file) await window.app.vault.modify(file, text);
-        else await window.app.vault.create(p, text);
+        if (file) return window.app.vault.modify(file, text);
+        // The vault API does not make the folder for you; the plugin does,
+        // on the receiving side, which is the path worth testing.
+        const parent = p.split("/").slice(0, -1).join("/");
+        if (parent && !window.app.vault.getAbstractFileByPath(parent)) {
+          await window.app.vault.createFolder(parent);
+        }
+        await window.app.vault.create(p, text);
       }, [p, text]),
     writeBinary: (p, bytes) =>
       page.evaluate(async ([p, arr]) => {
@@ -400,6 +412,58 @@ function device(browser, page, child, profile, name) {
 
     closeSettings: () => page.evaluate(() => window.app.setting.close()),
 
+    /** Run something in the window the settings pane is in. */
+    paneEval: async (fn, arg) => (await pane()).evaluate(fn, arg),
+
+    /** Photograph the vault window. */
+    shot: (file) => page.screenshot({ path: file }),
+
+    /**
+     * Photograph whichever window the settings pane is in.
+     *
+     * Obsidian 1.13 gives settings a window of its own, which opens at its own
+     * size; the same metrics override makes those shots one shape too.
+     */
+    shotPane: async (file, width = 1100, height = 860) => {
+      const where = await pane();
+      if (where !== page) await api.resize(width, height, where);
+      await sleep(400);
+      return where.screenshot({ path: file });
+    },
+
+    /** Open a note in the editor, so a screenshot shows the app in use. */
+    open: (path) =>
+      page.evaluate(async (path) => {
+        const file = window.app.vault.getAbstractFileByPath(path);
+        if (file) await window.app.workspace.getLeaf().openFile(file);
+      }, path),
+
+    /** Light or dark, for the second pass of screenshots. */
+    theme: async (which) => {
+      await page.evaluate((which) => window.app.changeTheme(which === "dark" ? "obsidian" : "moonstone"), which);
+      await sleep(600);
+    },
+
+    /**
+     * Lay the window out at a known size, so every screenshot is the same
+     * shape whatever the screen is.
+     *
+     * Through the renderer's metrics rather than the window's: Electron does
+     * not carry `Browser.setWindowBounds`, and a screenshot is of the page in
+     * any case. `deviceScaleFactor: 2` is what makes the text sharp.
+     */
+    async resize(width, height, target = page) {
+      const cdp = await target.context().newCDPSession(target);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height,
+        deviceScaleFactor: 2,
+        mobile: false,
+      });
+      await sleep(600);
+    },
+
+
     /** Shut the window and keep the asar it downloaded, for the next run. */
     async quit() {
       await browser.close().catch(() => undefined);
@@ -421,6 +485,9 @@ export async function environment() {
     root,
     relay,
     async open(name, port) {
+      // Whatever the OS hands out, never a fixed number: a fixed one is how a
+      // run attaches to the last run's window.
+      port = port ?? (await freePort());
       const vault = makeVault(root, name);
       const d = await launchObsidian(root, vault, name, port);
       d.vault = vault;
@@ -431,9 +498,10 @@ export async function environment() {
     /** Close a window and open it again on the same vault: a restart. */
     async restart(d) {
       await d.quit();
-      const back = await launchObsidian(root, d.vault, d.name, d.port);
+      const port = await freePort();
+      const back = await launchObsidian(root, d.vault, d.name, port);
       back.vault = d.vault;
-      back.port = d.port;
+      back.port = port;
       devices[devices.indexOf(d)] = back;
       return back;
     },

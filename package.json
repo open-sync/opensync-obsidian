@@ -7,7 +7,8 @@
     "wasm": "npm --prefix ../opensync/packages/client run wasm",
     "build": "npm run wasm && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "check:obsidian": "node checks/obsidiancheck.mjs"
+    "check:obsidian": "node checks/obsidiancheck.mjs",
+    "shots": "node checks/capture.mjs docs/screenshots"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
