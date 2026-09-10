@@ -55,7 +55,7 @@ it. What none of them can say is whether Obsidian loads the plugin, whether
 the settings pane renders, whether a QR appears on a canvas, or whether the
 vault API writes a file where the manifest says it goes.
 
-Two of the things this repository does differently were found by running it:
+Four of the things this repository does differently were found by running it:
 
 - **Rotation reported into a box its own re-render emptied.** The pane
   rebuilds at the end so the new key appears in its field, and that erased
@@ -65,6 +65,17 @@ Two of the things this repository does differently were found by running it:
 - **A conflict copy said `from This device`.** Both devices shipped the same
   default label, so both sides of a fork were named the same thing. The
   default is now the vault's own name.
+- **And then it named the wrong device.** The copy holds the *incoming*
+  version — the local side keeps the path — but the only device name a
+  merging device knows is its own, so every copy was labelled with the machine
+  the reader was already sitting at. Fixed in the engine rather than here: a
+  manifest now carries the name of the device that published it, sealed with
+  everything else, and the copy is named from that. A manifest that names no
+  device produces `from another device`, which is vague and true, rather than
+  a name that is specific and wrong.
+- **A conflict copy made this morning was dated yesterday.** `toISOString` is
+  UTC, and this date goes in a filename someone reads to work out which of two
+  files is newer. It is now the date on this device's own clock.
 
 ## Screenshots
 

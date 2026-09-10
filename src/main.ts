@@ -89,6 +89,9 @@ interface ManifestJson {
   generation: number;
   updated_at: number;
   entries: Record<string, ManifestEntry>;
+  /** The device that published it. Absent on manifests written before the
+   *  field existed, and on surfaces that do not set one. */
+  device?: string;
 }
 
 export default class OpenSyncPlugin extends Plugin {
@@ -278,7 +281,11 @@ export default class OpenSyncPlugin extends Plugin {
       const files = await this.readVault();
       fresh.ns.clear();
       for (const [path, bytes] of files) fresh.ns.stage(path, bytes);
-      const commit: Commit = fresh.ns.commit(1n, BigInt(Math.floor(Date.now() / 1000)));
+      const commit: Commit = fresh.ns.commit(
+        1n,
+        BigInt(Math.floor(Date.now() / 1000)),
+        this.settings.deviceLabel,
+      );
       await this.publish(fresh.relay, commit);
       this.base = fresh.ns.openManifest(
         commit.blobs.find((b) => b.id === commit.root)!.bytes,
@@ -334,7 +341,13 @@ export default class OpenSyncPlugin extends Plugin {
     for (const [path, bytes] of local) ns.stage(path, bytes);
 
     const generation = (this.pointer?.generation ?? 0) + 1;
-    const commit: Commit = ns.commit(BigInt(generation), BigInt(Math.floor(Date.now() / 1000)));
+    // Sealed with this device's name in it, so the *other* device can name a
+    // conflict copy after this one. Nothing here reads it back for ourselves.
+    const commit: Commit = ns.commit(
+      BigInt(generation),
+      BigInt(Math.floor(Date.now() / 1000)),
+      this.settings.deviceLabel,
+    );
     const ours: ManifestJson = ns.openManifest(
       commit.blobs.find((b) => b.id === commit.root)!.bytes,
     );
@@ -377,7 +390,7 @@ export default class OpenSyncPlugin extends Plugin {
       return;
     }
 
-    const date = new Date().toISOString().slice(0, 10);
+    const date = today();
     const result = ns.mergeManifests(
       this.base ?? null,
       ours,
@@ -401,6 +414,7 @@ export default class OpenSyncPlugin extends Plugin {
     const republish: Commit = ns.commit(
       BigInt(incoming.generation + 1),
       BigInt(Math.floor(Date.now() / 1000)),
+      this.settings.deviceLabel,
     );
     await this.publish(relay, republish);
     this.base = ns.openManifest(republish.blobs.find((b) => b.id === republish.root)!.bytes);
@@ -519,6 +533,21 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Today, as this device's clock sees it.
+ *
+ * `toISOString` is UTC, and this date goes in a filename a person reads. East
+ * of Greenwich that stamped yesterday on a conflict copy made this morning,
+ * and on a recovery kit printed this afternoon — a small wrongness in exactly
+ * the two places somebody is trying to work out which of two files is newer.
+ */
+function today(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 class OpenSyncSettingTab extends PluginSettingTab {
   /**
    * What the pane should say once it has been rebuilt.
@@ -624,7 +653,9 @@ class OpenSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Device name")
-      .setDesc("Shown in conflict copies, so you can tell which version came from where.")
+      .setDesc(
+        "Travels sealed inside what this device publishes, so a conflict copy made on another of your devices can say the version came from here.",
+      )
       .addText((t) =>
         t.setValue(this.plugin.settings.deviceLabel).onChange(async (v) => {
           this.plugin.settings.deviceLabel = v.trim() || this.app.vault.getName();
@@ -864,7 +895,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
               settings.namespaceKey,
               settings.namespace,
               settings.deviceLabel,
-              new Date().toISOString().slice(0, 10),
+              today(),
             );
             // Shown in the settings pane rather than copied to the clipboard:
             // a clipboard is exactly where these two keys should not go.

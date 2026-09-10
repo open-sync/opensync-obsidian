@@ -1,18 +1,18 @@
-   5s  Obsidian 1.13.7, relay ws://127.0.0.1:63692/
-   6s  01 the pane a new install shows — 1182 ms
-  10s  03 a vault, published — 1276 ms
-  12s  pairing code s2ya-2mrld3
-  16s  06 the joining device fetches the vault — 55 ms
-  18s  bootstrap 55 ms for 3 files
-  19s  conflict copy: Pairing (conflict 2026-09-08 from vaultB).md
-  28s  wrote 500 notes in 1044 ms, 504 files in the vault
-  32s  published 504 files in 2800 ms; the other device fetched them in 1466 ms
-  33s  10 the vault at scale, on the device it arrived at — 997 ms
-  35s  11 search across the synced vault — 1404 ms
-  36s  12 the same vault, dark — 1559 ms
-  38s  13 the pane, dark — 1935 ms
-  38s  close the pane — 121 ms
-  39s  back to light — 627 ms
-  40s  search the relay's own storage for plaintext — 46 ms
-  40s  relay holds 515 files, 4.7 MB, 0 plaintext hits (searched for 6 strings incl. canary-j5sj5frmqec-1788843415551)
-  40s  {"pair":2119,"bootstrap":55,"publish":2800,"fetch":1466,"files":504,"relay":{"files":515,"bytes":4973523,"hits":0,"searched":6,"token":"canary-j5sj5frmqec-1788843415551"}}
+   6s  Obsidian 1.13.7, relay ws://127.0.0.1:50822/
+   7s  01 the pane a new install shows — 1246 ms
+  11s  03 a vault, published — 1332 ms
+  13s  pairing code 7z8z-7kf5tv
+  18s  06 the joining device fetches the vault — 40 ms
+  19s  bootstrap 41 ms for 3 files
+  20s  conflict copy: Pairing (conflict 2026-09-11 from vaultA).md
+  30s  wrote 500 notes in 2275 ms, 504 files in the vault
+  37s  published 504 files in 4914 ms; the other device fetched them in 2201 ms
+  38s  10 the vault at scale, on the device it arrived at — 1011 ms
+  40s  11 search across the synced vault — 1451 ms
+  41s  12 the same vault, dark — 1591 ms
+  43s  13 the pane, dark — 1965 ms
+  44s  close the pane — 105 ms
+  44s  back to light — 661 ms
+  46s  search the relay's own storage for plaintext — 81 ms
+  46s  relay holds 515 files, 4.7 MB, 0 plaintext hits (searched for 6 strings incl. canary-5gdmk6uxfft-1789064014509)
+  46s  {"pair":2119,"bootstrap":41,"publish":4914,"fetch":2201,"files":504,"relay":{"files":515,"bytes":4973593,"hits":0,"searched":6,"token":"canary-5gdmk6uxfft-1789064014509"}}

@@ -39,6 +39,12 @@ async function step(name, fn, ms = 120_000) {
     return result;
   } catch (e) {
     say(`${name} — FAILED: ${e.message}`);
+    // What each window was saying at the moment it stopped. A bare timeout
+    // names the step and nothing else, which is how the first two stalls here
+    // were lost.
+    for (const d of devices) {
+      say(`   ${JSON.stringify(await d.diagnose().catch((x) => ({ diagnose: x.message })))}`);
+    }
     throw e;
   } finally {
     clearTimeout(timer);
@@ -46,9 +52,12 @@ async function step(name, fn, ms = 120_000) {
 }
 
 const env = await environment();
+/** Filled as each window opens, so a failing step can ask them what happened. */
+const devices = [];
 try {
   const A = await env.open("vaultA");
   const B = await env.open("vaultB");
+  devices.push(A, B);
   for (const d of [A, B]) await d.resize(1440, 900);
   say(`Obsidian ${await A.version()}, relay ${env.relay.ws}`);
 

@@ -181,6 +181,15 @@ async function launchObsidian(root, vault, name, port) {
 
 /** Everything the check does to one vault, said in the vault's own vocabulary. */
 function device(browser, page, child, profile, name) {
+  // Kept from the moment the window opens, because the thing worth reading
+  // after a hang is what the window was saying while it hung. A capture run
+  // stalled twice on a first sync and left nothing behind but a timeout.
+  const noise = [];
+  page.on("console", (m) => {
+    if (m.type() === "error" || m.type() === "warning") noise.push(`${m.type()}: ${m.text()}`);
+  });
+  page.on("pageerror", (e) => noise.push(`pageerror: ${e.message}`));
+
   // The settings pane, evaluated in the window rather than here: a function
   // defined out here does not travel into `page.evaluate`. Whichever tab
   // content is on screen — there is one per settings tab, and only the open
@@ -411,6 +420,29 @@ function device(browser, page, child, profile, name) {
     },
 
     closeSettings: () => page.evaluate(() => window.app.setting.close()),
+
+    /**
+     * What this window has been complaining about, and what it is doing now.
+     * For printing when something times out — a stalled sync says nothing on
+     * its own, and the status bar is the only place it admits to being stuck.
+     */
+    async diagnose() {
+      const state = await page
+        .evaluate(() => {
+          const p = window.app?.plugins?.plugins?.opensync;
+          return {
+            status:
+              [...document.querySelectorAll(".status-bar-item")]
+                .map((e) => e.textContent)
+                .find((t) => t.startsWith("OpenSync")) ?? null,
+            running: p?.running ?? null,
+            generation: p?.pointer?.generation ?? null,
+            files: window.app?.vault?.getFiles().length ?? null,
+          };
+        })
+        .catch((e) => ({ unreachable: e.message }));
+      return { name, ...state, noise: noise.slice(-12) };
+    },
 
     /** Run something in the window the settings pane is in. */
     paneEval: async (fn, arg) => (await pane()).evaluate(fn, arg),

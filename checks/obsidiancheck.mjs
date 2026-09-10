@@ -155,16 +155,20 @@ try {
   await A.sync();
   const copies = (await B.files()).filter((p) => p.startsWith("shared (conflict"));
   ok(copies.length === 1, `a fork produces one conflict copy (${JSON.stringify(copies)})`);
-  // Named after the vault that made it. Both devices used to ship the same
-  // default label, so both sides of a fork were "from This device".
-  ok(copies[0]?.includes("from vaultB"), `and it names the vault it came from (${copies[0]})`);
+  // Found on B, holding A's version — so it is named after A. It used to be
+  // named after B, which is the device the reader is already sitting at, and
+  // the copy said the opposite of the truth about what was inside it.
+  const inside = await B.read(copies[0]);
+  ok(copies[0]?.includes("from vaultA"), `and it names the device whose version is inside it (${copies[0]})`);
+  ok(inside?.includes("A was here"), `which is the version actually in it (${JSON.stringify(inside)})`);
   const kept = await Promise.all(["shared.md", ...copies].map((p) => B.read(p)));
   ok(kept.some((t) => t.includes("A was here")) && kept.some((t) => t.includes("B was here")),
      `neither side is lost (${JSON.stringify(kept)})`);
   await B.sync();
   await A.sync();
-  ok((await A.files()).filter((p) => p.startsWith("shared (conflict")).length === 1,
-     "the conflict copy converges back to A");
+  const onA = (await A.files()).filter((p) => p.startsWith("shared (conflict"));
+  ok(onA.length === 1, "the conflict copy converges back to A");
+  ok(onA[0] === copies[0], `and keeps the name it was given (${onA[0]})`);
 
   // ---- doing it again does nothing -----------------------------------------
   const before = await B.files();
