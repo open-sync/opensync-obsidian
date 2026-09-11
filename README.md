@@ -58,6 +58,31 @@ npm run typecheck
 `<your vault>/.obsidian/plugins/opensync/`, then enable OpenSync under
 Settings → Community plugins.
 
+## The hosted relay
+
+The plugin ships pointing at whatever relay the build names:
+
+```sh
+OPENSYNC_HOSTED_RELAY=wss://relay01.example.net/ npm run build
+```
+
+With that set, a fresh install already has the relay address and its blob
+endpoint filled in, and the plan applies. With it empty — which is what a local
+build gets — the desktop default is a relay on this machine, the mobile default
+is nothing, and no device is metered, because every user is running their own.
+
+`npm run check:hosted` tests that path without a domain or a certificate
+authority: it stands TLS in front of the relay with a self-signed certificate,
+maps the hostname inside Obsidian's own resolver, and drives a real pairing and
+sync over `wss://` and `https://`. It is the only check that exercises TLS at
+all.
+
+**Name the relay for what it is, not for which one it is.** A device keeps the
+address that worked, so the hostname in a build is effectively permanent for
+every install made from it — `relay01` bakes today's topology into installs
+that can never be told otherwise. One stable name with whatever you like behind
+it is the version that lets you move.
+
 ## Verify
 
 ```sh

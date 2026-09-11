@@ -67,7 +67,16 @@ const FREE_EXTENSIONS = [
  * The plan gate below reads this — so the day this string is filled in is the
  * day the free plan starts meaning anything, and not before.
  */
-const HOSTED_RELAY = "";
+declare const __HOSTED_RELAY__: string;
+const HOSTED_RELAY = __HOSTED_RELAY__;
+
+/** The blob endpoint beside a relay: same host, the other scheme. */
+function storageFor(ws: string): string {
+  if (!ws) return "";
+  if (ws.startsWith("wss://")) return `https://${ws.slice(6).replace(/\/+$/, "")}`;
+  if (ws.startsWith("ws://")) return `http://${ws.slice(5).replace(/\/+$/, "")}`;
+  return "";
+}
 
 interface OpenSyncSettings {
   relayWs: string;
@@ -110,8 +119,17 @@ interface OpenSyncSettings {
 // shipping it as a default just produces a connection error that points at
 // the wrong thing.
 const DEFAULTS: OpenSyncSettings = {
-  relayWs: Platform.isMobile ? "" : "ws://127.0.0.1:4848/",
-  relayHttp: Platform.isMobile ? "" : "http://127.0.0.1:4848",
+  // The hosted relay when this build has one, so an install syncs with
+  // nothing typed. Without one the desktop default is a relay on this
+  // machine, and the mobile default is empty — 127.0.0.1 on a phone is the
+  // phone, and shipping it produces a connection error pointing at the wrong
+  // thing.
+  relayWs: HOSTED_RELAY || (Platform.isMobile ? "" : "ws://127.0.0.1:4848/"),
+  relayHttp: HOSTED_RELAY
+    ? storageFor(HOSTED_RELAY)
+    : Platform.isMobile
+      ? ""
+      : "http://127.0.0.1:4848",
   accountSecret: "",
   namespaceKey: "",
   namespace: "vault:main",

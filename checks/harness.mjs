@@ -111,7 +111,7 @@ async function startRelay(root) {
  * load a community plugin; the check answers that the way a person does,
  * because a profile that skipped it would not be testing plugin loading at all.
  */
-async function launchObsidian(root, vault, name, port) {
+async function launchObsidian(root, vault, name, port, extraArgs = []) {
   const profile = join(root, `profile-${name}`);
   mkdirSync(profile, { recursive: true });
   mkdirSync(CACHE, { recursive: true });
@@ -122,9 +122,11 @@ async function launchObsidian(root, vault, name, port) {
   );
 
   if (!existsSync(APP)) throw new Error(`no Obsidian at ${APP} — set OBSIDIAN to its binary`);
-  const child = spawn(APP, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], {
-    stdio: ["ignore", "ignore", "ignore"],
-  });
+  const child = spawn(
+    APP,
+    [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, ...extraArgs],
+    { stdio: ["ignore", "ignore", "ignore"] },
+  );
 
   let deadline = Date.now() + 120_000;
   let browser = null;
@@ -516,12 +518,12 @@ export async function environment() {
   const env = {
     root,
     relay,
-    async open(name, port) {
+    async open(name, port, extraArgs = []) {
       // Whatever the OS hands out, never a fixed number: a fixed one is how a
       // run attaches to the last run's window.
       port = port ?? (await freePort());
       const vault = makeVault(root, name);
-      const d = await launchObsidian(root, vault, name, port);
+      const d = await launchObsidian(root, vault, name, port, extraArgs);
       d.vault = vault;
       d.port = port;
       devices.push(d);
