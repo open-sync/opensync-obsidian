@@ -60,16 +60,24 @@ Settings → Community plugins.
 
 ## The hosted relay
 
-The plugin ships pointing at whatever relay the build names:
+The plugin ships pointing at `wss://relay.opensync.network/`, and a build can
+name a different one — or none:
 
 ```sh
-OPENSYNC_HOSTED_RELAY=wss://relay01.example.net/ npm run build
+npm run build                                                  # the hosted relay
+OPENSYNC_HOSTED_RELAY=wss://relay.example.net/ npm run build   # somebody else's
+OPENSYNC_HOSTED_RELAY= npm run build                           # none
 ```
 
-With that set, a fresh install already has the relay address and its blob
-endpoint filled in, and the plan applies. With it empty — which is what a local
-build gets — the desktop default is a relay on this machine, the mobile default
-is nothing, and no device is metered, because every user is running their own.
+With a relay named, a fresh install already has the address and its blob
+endpoint filled in, and the plan applies. With it empty the desktop default is
+a relay on this machine, the mobile default is nothing, and no device is
+metered, because every user is running their own.
+
+The hosted relay **serves only accounts its operator has admitted**, so a fresh
+install that has not asked for access gets a refusal rather than a sync. That
+is a sentence the plugin shows — "this relay does not serve your account" — not
+a connection error, because the two need different answers.
 
 `npm run check:hosted` tests that path without a domain or a certificate
 authority: it stands TLS in front of the relay with a self-signed certificate,
@@ -79,9 +87,10 @@ all.
 
 **Name the relay for what it is, not for which one it is.** A device keeps the
 address that worked, so the hostname in a build is effectively permanent for
-every install made from it — `relay01` bakes today's topology into installs
-that can never be told otherwise. One stable name with whatever you like behind
-it is the version that lets you move.
+every install made from it — a `relay01` would bake today's topology into
+installs that can never be told otherwise. `relay.opensync.network` is one
+stable name with whatever you like behind it, which is the version that lets
+you move.
 
 ## Verify
 

@@ -15,11 +15,20 @@ await esbuild.build({
   // away keeps the cjs build warning-free rather than shipping a misleading one.
   define: {
     "import.meta.url": '""',
-    // The relay this build ships pointing at. Empty unless the build says
-    // otherwise, which is what makes a local build self-hosted by default and
-    // lets a release be built for the hosted one:
-    //   OPENSYNC_HOSTED_RELAY=wss://relay01.example.net/ npm run build
-    __HOSTED_RELAY__: JSON.stringify(process.env.OPENSYNC_HOSTED_RELAY ?? ""),
+    // The relay this build ships pointing at.
+    //
+    // It defaults to the hosted one now that there is one. The empty default
+    // was honest while no relay existed — with none, every user is running
+    // their own and the plan gate means nothing — but it also meant a fresh
+    // install on a phone had an empty relay field and no way to guess what
+    // belonged in it.
+    //
+    // Build for a different relay, or for none, by saying so:
+    //   OPENSYNC_HOSTED_RELAY=wss://relay.example.net/ npm run build
+    //   OPENSYNC_HOSTED_RELAY= npm run build
+    __HOSTED_RELAY__: JSON.stringify(
+      process.env.OPENSYNC_HOSTED_RELAY ?? "wss://relay.opensync.network/",
+    ),
   },
   sourcemap: false,
   minify: true,

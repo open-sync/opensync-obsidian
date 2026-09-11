@@ -4,7 +4,7 @@
 // production path — a real hostname, TLS, and a default nobody types —
 // completely untested. This check builds the plugin the way a release would,
 // stands a TLS front end in front of the relay, and points Obsidian's own
-// resolver at it, so `wss://relay01.opensync.network/` resolves to the relay
+// resolver at it, so `wss://relay.opensync.network/` resolves to the relay
 // on this machine and the plugin cannot tell the difference.
 //
 //   npm run check:hosted
@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { createServer as tcpServer } from "node:net";
 import { environment, failed, ok, sleep } from "./harness.mjs";
 
-const HOST = "relay01.opensync.network";
+const HOST = "relay.opensync.network";
 const RELAY_WS = `wss://${HOST}/`;
 const RELAY_HTTP = `https://${HOST}`;
 

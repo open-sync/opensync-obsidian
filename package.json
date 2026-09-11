@@ -10,7 +10,7 @@
     "check:obsidian": "node scripts/build.mjs && node checks/obsidiancheck.mjs",
     "shots": "node checks/capture.mjs docs/screenshots",
     "check:tiers": "node scripts/build.mjs && node checks/tierscheck.mjs",
-    "check:hosted": "OPENSYNC_HOSTED_RELAY=wss://relay01.opensync.network/ node scripts/build.mjs && node checks/hostedcheck.mjs",
+    "check:hosted": "OPENSYNC_HOSTED_RELAY=wss://relay.opensync.network/ node scripts/build.mjs && node checks/hostedcheck.mjs",
     "check:all": "npm run check:obsidian && npm run check:tiers && npm run check:hosted"
   },
   "devDependencies": {
