@@ -36,8 +36,8 @@ not inside it:
 
 ```text
 openapps/
-├── opensync/       the engine
-└── openobsidian/   this repository
+├── opensync/           the engine
+└── opensync-obsidian/   this repository
 ```
 
 Every path into it is relative, so both have to be present to build. That is

@@ -21,7 +21,7 @@ const APP = process.env.OBSIDIAN ?? "/Applications/Obsidian.app/Contents/MacOS/O
 // downloads about 25 MB before it will start. Whatever it fetched is kept here
 // between runs and copied into the next profile, which makes the check fast on
 // a second run and identical on both.
-const CACHE = join(tmpdir(), "openobsidian-check-cache");
+const CACHE = join(tmpdir(), "opensync-obsidian-check-cache");
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -512,7 +512,7 @@ function device(browser, page, child, profile, name) {
 }
 
 export async function environment() {
-  const root = mkdtempSync(join(tmpdir(), "openobsidian-check-"));
+  const root = mkdtempSync(join(tmpdir(), "opensync-obsidian-check-"));
   const relay = await startRelay(root);
   const devices = [];
   const env = {
