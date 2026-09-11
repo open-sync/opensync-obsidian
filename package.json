@@ -8,7 +8,8 @@
     "build": "npm run wasm && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "check:obsidian": "node checks/obsidiancheck.mjs",
-    "shots": "node checks/capture.mjs docs/screenshots"
+    "shots": "node checks/capture.mjs docs/screenshots",
+    "check:tiers": "node checks/tierscheck.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

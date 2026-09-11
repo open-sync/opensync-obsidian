@@ -1,7 +1,32 @@
-# OpenObsidian
+# OpenSync for Obsidian
 
-Free, end-to-end encrypted sync for Obsidian vaults. Unlimited markdown, no
-subscription, and you can point it at a relay you run yourself.
+End-to-end encrypted sync for your Obsidian vault.
+
+**The plugin is called OpenSync**, and the manifest keeps that name: Obsidian's
+community guidance discourages putting "Obsidian" in a plugin's name or id, and
+the id is permanent once a plugin is listed. "OpenSync for Obsidian" is what the
+product is called everywhere a person reads prose — this file, the site, the
+listing description — which is the half that does the work anyway.
+
+## What is free, and what is not
+
+| | Free | Supporter |
+|---|---|---|
+| Notes, canvases, Bases, Excalidraw, CSV, SVG — what a vault is *written* in | ✅ unlimited | ✅ unlimited |
+| Images, PDFs, audio, video — what a vault *accumulates* | on the device they are on | ✅ synced |
+| Devices, pairing, rotation, recovery kit, conflict handling | ✅ | ✅ |
+| **A relay you run yourself** | ✅ **everything unlocked** | — |
+
+The last row is the point. What is being sold is *not running a server*, so a
+device pointed at somebody's own relay is not metered at all: its storage is
+already theirs, and charging for it would be charging for the one thing we are
+not doing. The plan only ever applies to the relay we pay for.
+
+Attachments are the only part of a vault that costs real money to keep — a
+504-note vault measures 4.7 MB on a relay, database included — which is why
+they are the line, and why the line is drawn by file type on the client and by
+bytes on the server. The relay cannot see a file type at all: filenames live
+inside the sealed manifest and every blob is ciphertext.
 
 ## The engine is a separate repository
 

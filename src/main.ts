@@ -27,6 +27,48 @@ import {
   Signer,
 } from "../../opensync/packages/client/src";
 
+/**
+ * What the free plan carries: the file types a vault is *written* in, as
+ * opposed to the ones it accumulates.
+ *
+ * Chosen by weight rather than by importance. A note, a canvas, a Bases
+ * table and an Excalidraw drawing are all a few kilobytes of text; a
+ * screenshot, a PDF or a voice memo is three orders of magnitude bigger, and
+ * attachments are the only thing here that costs real money to keep. The list
+ * is deliberately an allow-list: a file type nobody anticipated is far more
+ * likely to be a new kind of binary than a new kind of prose, and the failure
+ * that matters is the one where a photo library syncs by accident.
+ *
+ * `.excalidraw.md` and `.canvas` are Obsidian's own; `.json`, `.csv`, `.svg`,
+ * `.yaml` and `.bib` are what the common plugins write beside them.
+ */
+const FREE_EXTENSIONS = [
+  "md",         // notes, and Excalidraw drawings, which are markdown
+  "canvas",     // Obsidian Canvas
+  "base",       // Obsidian Bases
+  "excalidraw", // the legacy Excalidraw format, plain JSON
+  "json",       // plugin data, and drawings
+  "csv",        // tables, Dataview sources
+  "txt",
+  "svg",        // diagrams — vector, so text, and small
+  "css",        // themes and snippets
+  "yaml",
+  "yml",
+  "bib",        // citations
+  "drawio",     // diagrams.net, which is XML
+];
+
+/**
+ * The relay this plugin ships pointing at, and the only one anything is
+ * metered on.
+ *
+ * Empty until there is one, which is also the honest default: with no hosted
+ * relay, every user is running their own, and there is nothing to sell them.
+ * The plan gate below reads this — so the day this string is filled in is the
+ * day the free plan starts meaning anything, and not before.
+ */
+const HOSTED_RELAY = "";
+
 interface OpenSyncSettings {
   relayWs: string;
   relayHttp: string;
@@ -37,8 +79,29 @@ interface OpenSyncSettings {
   namespace: string;
   deviceLabel: string;
   syncOnSave: boolean;
-  /** Markdown is free and unlimited; attachments are the metered tier. */
+  /** What the user has asked for. Only granted when the plan allows it. */
   syncAttachments: boolean;
+  /**
+   * What the account is entitled to.
+   *
+   * A flag in a settings file, which anyone can edit — and that is fine,
+   * because it is not what enforces anything. The relay cannot see a file
+   * type at all: filenames live inside the sealed manifest and every blob is
+   * ciphertext. What the server enforces is bytes, through the account's
+   * quota, and this flag only decides what this device offers to upload.
+   * Filled from the account once there is one to ask.
+   */
+  plan: "free" | "supporter";
+  /**
+   * Which relay host the plan applies to. Ours.
+   *
+   * Not shown in the pane. It exists because the thing being sold is *not
+   * running a server*: someone pointing this at their own relay is already
+   * paying for their own storage, in their own electricity, and crippling
+   * their client would be charging them for the one thing we are not doing.
+   * So the gate is "is this our relay", not "has this user paid".
+   */
+  hostedRelay: string;
   intervalSeconds: number;
 }
 
@@ -57,6 +120,8 @@ const DEFAULTS: OpenSyncSettings = {
   deviceLabel: "",
   syncOnSave: true,
   syncAttachments: false,
+  plan: "free",
+  hostedRelay: HOSTED_RELAY,
   intervalSeconds: 120,
 };
 
@@ -92,6 +157,25 @@ interface ManifestJson {
   /** The device that published it. Absent on manifests written before the
    *  field existed, and on surfaces that do not set one. */
   device?: string;
+  /** The extensions the publisher was carrying. Absent means everything. */
+  scope?: string[];
+}
+
+/**
+ * Does this manifest have anything to say about `path`?
+ *
+ * `false` means the device that wrote it was not carrying this kind of file,
+ * so the path's absence is silence rather than a deletion. Mirrors
+ * `Manifest::covers` in the engine; the two must agree, because one decides
+ * what the merge keeps and the other decides what gets moved to the trash.
+ */
+function covers(manifest: ManifestJson, path: string): boolean {
+  if (!manifest.scope) return true;
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return manifest.scope.includes(ext);
 }
 
 export default class OpenSyncPlugin extends Plugin {
@@ -191,16 +275,74 @@ export default class OpenSyncPlugin extends Plugin {
     return { ns: this.ns, relay: this.relay };
   }
 
-  /** Files this device offers, honouring the attachment setting. */
+  /**
+   * Is this device carrying attachments?
+   *
+   * Wanting them is not enough; the plan has to allow it. Kept as one
+   * accessor because the answer decides two things that must never disagree —
+   * which files are published, and what the manifest claims to cover.
+   */
+  private get carriesEverything(): boolean {
+    return this.settings.syncAttachments && !this.metered;
+  }
+
+  /**
+   * Is this device storing on the relay we pay for?
+   *
+   * Only then does a plan mean anything. A relay of your own — on a machine
+   * in your house, or anywhere else — is unmetered, because the storage is
+   * yours and so is the bill.
+   */
+  private get metered(): boolean {
+    if (this.settings.plan === "supporter") return false;
+    const hosted = this.settings.hostedRelay.trim();
+    if (!hosted) return false;
+    const host = (url: string) => {
+      try {
+        return new URL(url).host.toLowerCase();
+      } catch {
+        return "";
+      }
+    };
+    const ours = host(hosted) || hosted.toLowerCase();
+    const mine = host(this.settings.relayWs);
+    return mine !== "" && mine === ours;
+  }
+
+  /** Whether the plan is doing anything here, for the pane and the checks. */
+  get onMeteredRelay(): boolean {
+    return this.metered;
+  }
+
+  /** What the manifests this device publishes cover. `undefined` is everything. */
+  private get scope(): string[] | undefined {
+    return this.carriesEverything ? undefined : FREE_EXTENSIONS;
+  }
+
+  /** Files this device offers, which is exactly what its scope claims. */
   private async readVault(): Promise<Map<string, Uint8Array>> {
     const out = new Map<string, Uint8Array>();
+    const scope = this.scope;
     for (const file of this.app.vault.getFiles()) {
-      const isMarkdown = file.extension === "md";
-      if (!isMarkdown && !this.settings.syncAttachments) continue;
+      if (scope && !scope.includes(file.extension.toLowerCase())) continue;
       const data = await this.app.vault.readBinary(file);
       out.set(file.path, new Uint8Array(data));
     }
     return out;
+  }
+
+  /** Whether attachments are actually being carried, plan included. */
+  get carriesAttachments(): boolean {
+    return this.carriesEverything;
+  }
+
+  /** Files in this vault the plan is not carrying, so the pane can say so. */
+  heldBackPaths(): string[] {
+    if (this.carriesEverything) return [];
+    return this.app.vault
+      .getFiles()
+      .filter((f) => !FREE_EXTENSIONS.includes(f.extension.toLowerCase()))
+      .map((f) => f.path);
   }
 
   private async writeFile(path: string, bytes: Uint8Array): Promise<void> {
@@ -285,6 +427,7 @@ export default class OpenSyncPlugin extends Plugin {
         1n,
         BigInt(Math.floor(Date.now() / 1000)),
         this.settings.deviceLabel,
+        this.scope,
       );
       await this.publish(fresh.relay, commit);
       this.base = fresh.ns.openManifest(
@@ -347,6 +490,7 @@ export default class OpenSyncPlugin extends Plugin {
       BigInt(generation),
       BigInt(Math.floor(Date.now() / 1000)),
       this.settings.deviceLabel,
+      this.scope,
     );
     const ours: ManifestJson = ns.openManifest(
       commit.blobs.find((b) => b.id === commit.root)!.bytes,
@@ -415,6 +559,7 @@ export default class OpenSyncPlugin extends Plugin {
       BigInt(incoming.generation + 1),
       BigInt(Math.floor(Date.now() / 1000)),
       this.settings.deviceLabel,
+      this.scope,
     );
     await this.publish(relay, republish);
     this.base = ns.openManifest(republish.blobs.find((b) => b.id === republish.root)!.bytes);
@@ -490,6 +635,11 @@ export default class OpenSyncPlugin extends Plugin {
 
     for (const path of local.keys()) {
       if (path in manifest.entries) continue;
+      // Absent, but only a deletion if the device that wrote this manifest
+      // was carrying that kind of file. Without this check, one device
+      // turning off attachments trashed the other device's attachments —
+      // measured, on two real vaults, before the scope existed.
+      if (!covers(manifest, path)) continue;
       const file = this.app.vault.getAbstractFileByPath(path);
       if (file instanceof TFile) await this.app.fileManager.trashFile(file);
     }
@@ -663,15 +813,46 @@ class OpenSyncSettingTab extends PluginSettingTab {
         }),
       );
 
+    const metered = this.plugin.onMeteredRelay;
+    const supporter = !metered;
+    const held = this.plugin.heldBackPaths();
     new Setting(containerEl)
       .setName("Sync attachments")
-      .setDesc("Markdown is unlimited and free. Attachments are what actually cost storage, so they are off until you turn them on.")
+      .setDesc(
+        supporter
+          ? this.plugin.settings.plan === "supporter"
+            ? "Images, PDFs, audio and everything else in the vault. Notes sync either way."
+            : "You are syncing through your own relay, so your storage is your own and nothing here is limited. Notes sync either way."
+          : "Notes, canvases and the other text your vault is written in sync free and unlimited. " +
+            "Images, PDFs and audio are what actually cost storage to keep, so they are part of the paid plan. " +
+            "Nothing is deleted either way — an attachment simply stays on the device it is on.",
+      )
       .addToggle((t) =>
-        t.setValue(this.plugin.settings.syncAttachments).onChange(async (v) => {
-          this.plugin.settings.syncAttachments = v;
-          await this.plugin.saveSettings();
-        }),
+        t
+          .setValue(this.plugin.carriesAttachments)
+          .setDisabled(!supporter)
+          .onChange(async (v) => {
+            this.plugin.settings.syncAttachments = v;
+            await this.plugin.saveSettings();
+            this.display();
+          }),
       );
+
+    if (!supporter && held.length > 0) {
+      // Said out loud rather than discovered. A file that silently does not
+      // sync is indistinguishable from a file that failed to sync, and the
+      // second one is the bug report.
+      const note = containerEl.createEl("div", { cls: "opensync-pairing" });
+      note.createEl("p", {
+        text: `${held.length} file${held.length === 1 ? "" : "s"} in this vault ${
+          held.length === 1 ? "is" : "are"
+        } not covered by the free plan, so ${held.length === 1 ? "it stays" : "they stay"} on this device only:`,
+      });
+      note.createEl("p", {
+        text: held.slice(0, 5).join(", ") + (held.length > 5 ? `, and ${held.length - 5} more` : ""),
+        cls: "opensync-invite",
+      });
+    }
 
     new Setting(containerEl)
       .setName("Sync automatically")
