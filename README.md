@@ -1,36 +1,178 @@
 # OpenSync for Obsidian
 
-End-to-end encrypted sync for your Obsidian vault.
+End-to-end encrypted sync for your Obsidian vault. Your notes are sealed on
+your own device before they leave it, so the server stores ciphertext and
+cannot read a note, a filename, or a folder. Notes sync free and unlimited.
+Attachments are the paid tier — or free forever on a relay you run yourself.
 
-**The plugin is called OpenSync**, and the manifest keeps that name: Obsidian's
-community guidance discourages putting "Obsidian" in a plugin's name or id, and
-the id is permanent once a plugin is listed. "OpenSync for Obsidian" is what the
-product is called everywhere a person reads prose — this file, the site, the
-listing description — which is the half that does the work anyway.
+> **Status: not yet in the community plugin directory.** It is verified working
+> inside Obsidian 1.13.7 by 91 automated assertions that drive the real
+> application, but it has not been reviewed by Obsidian staff and has not been
+> tested on a phone. See [Status](#status).
 
-## What is free, and what is not
+---
 
-| | Free | Supporter |
-|---|---|---|
-| Notes, canvases, Bases, Excalidraw, CSV, SVG — what a vault is *written* in | ✅ unlimited | ✅ unlimited |
-| Images, PDFs, audio, video — what a vault *accumulates* | on the device they are on | ✅ synced |
-| Devices, pairing, rotation, recovery kit, conflict handling | ✅ | ✅ |
-| **A relay you run yourself** | ✅ **everything unlocked** | — |
+## What syncs, and what it costs
 
-The last row is the point. What is being sold is *not running a server*, so a
-device pointed at somebody's own relay is not metered at all: its storage is
-already theirs, and charging for it would be charging for the one thing we are
-not doing. The plan only ever applies to the relay we pay for.
+| | Free | Supporter | Your own relay |
+|---|---|---|---|
+| Notes, canvases, Bases, Excalidraw, CSV, SVG — what a vault is *written* in | unlimited | unlimited | unlimited |
+| Images, PDFs, audio, video — what a vault *accumulates* | stay on the device they are on | synced | synced |
+| Devices, pairing, key rotation, recovery kit, conflict handling | ✅ | ✅ | ✅ |
+| Runs against a relay you control | ✅ | ✅ | ✅ |
 
-Attachments are the only part of a vault that costs real money to keep — a
-504-note vault measures 4.7 MB on a relay, database included — which is why
-they are the line, and why the line is drawn by file type on the client and by
-bytes on the server. The relay cannot see a file type at all: filenames live
-inside the sealed manifest and every blob is ciphertext.
+**Why that line and not another one.** A vault of five hundred notes weighs
+about five megabytes. A vault with a year of screenshots in it weighs
+gigabytes. Text costs so little to carry that charging for it would be theatre;
+attachments are the only part that costs real money to keep, so they are the
+part that is paid for.
 
-## The engine is a separate repository
+**Running your own relay unlocks everything, free.** What is being sold is *not
+running a server*. If you run one, the storage is already yours and there is
+nothing to charge you for — so the plugin stops metering the moment it is
+pointed somewhere that is not our relay. That is not an honour system: it reads
+the relay's hostname. See [docs/self-hosting.md](docs/self-hosting.md).
 
-This plugin is built on **OpenSync**, an end-to-end encrypted sync engine that
+The file types the free plan carries are `md`, `canvas`, `base`, `excalidraw`,
+`json`, `csv`, `txt`, `svg`, `css`, `yaml`, `yml`, `bib`, `drawio`. An
+Excalidraw drawing is a markdown file, so it syncs. **Nothing is ever deleted
+by a plan**: a file the plan does not carry simply stays on the device it is
+on, and the settings pane lists them by name so you are never guessing.
+
+## Install
+
+**From the community directory** — not yet; see [Status](#status).
+
+**Beta, from this repository.** Install [BRAT][brat], then *Add beta plugin*
+and give it `open-sync/opensync-obsidian`.
+
+**By hand.** Download `main.js`, `manifest.json` and `styles.css` from
+[the latest release][releases] into
+`<your vault>/.obsidian/plugins/opensync/`, then enable **OpenSync** under
+Settings → Community plugins.
+
+[brat]: https://github.com/TfTHacker/obsidian42-brat
+[releases]: https://github.com/open-sync/opensync-obsidian/releases
+
+## Start syncing
+
+### The first device
+
+1. **Settings → OpenSync.**
+2. Press **Generate** beside *Vault key*, then beside *Account key*. The relay
+   address is already filled in.
+3. Press **Recovery kit → Show it**, and print the page. Do this now rather
+   than later — see [If you lose everything](#if-you-lose-everything).
+
+That is the whole setup. The status bar reads *OpenSync: up to date* when the
+vault has been published.
+
+### The second device
+
+On the device that already has the account: **Add a device → Show a code.**
+
+You get three ways to carry the same pairing, and they are for different
+situations:
+
+- **Scan the QR** — for a phone, which is the worst thing to type on.
+- **Copy the `opensync://pair…` line** — for a second computer, which cannot
+  point a camera at the first one's screen.
+- **Read the ten characters aloud** — for anything else. The relay address has
+  to be typed too in that case, which is the half people get wrong.
+
+On the new device, paste or type it into *Join from a code* and press **Join**.
+
+**Your vault key is never shown and never typed.** It travels sealed under a
+key derived from those ten characters by a SPAKE2 exchange, so the relay in the
+middle carries ciphertext and somebody watching the wire at that exact moment
+gets one guess. A code is spent when it is answered — right or wrong — which is
+what lets it be short enough to read down a phone line.
+
+## What happens when two devices disagree
+
+Nothing is lost. Ever. That is the one rule everything else bends around.
+
+Two devices that edit the same note produce two files: yours keeps its name,
+and the other becomes `note (conflict 2026-09-12 from Laptop).md` — named after
+the device whose version is *inside* it, so you can tell which is which before
+deciding. A notice tells you it happened.
+
+A deletion never beats an edit. If one device removes a file while another
+changes it, the change wins; an unwanted file is a nuisance you fix in a
+second, and a lost edit is gone.
+
+## If you lose everything
+
+There is no password reset, because there is no password and we hold no key.
+If every device is lost, the only way back into the vault is the **recovery
+kit** — a page you print, carrying both keys grouped for typing, each with a
+checksum, and bound together by a fingerprint so two pages cannot be mixed into
+an account that owns nothing.
+
+Print it. Put it where the passports are. Not in the vault it unlocks, and not
+in a photo library that syncs to somebody else's server.
+
+## If a device is lost or stolen
+
+**Rotate the vault key.** It re-seals everything under a new key and sweeps
+what the old one addressed, after which anything left on a relay is ciphertext
+nobody holds a key for. This is the only real delete a system like this has: a
+relay may ignore a deletion request, and anything ever fetched was ever copied.
+
+It costs pairing every device you are keeping, and it always costs that. There
+is no announcement, because a notice that reached your devices would reach the
+one you are rotating away from.
+
+One warning the pane also gives you: one key covers every namespace on the
+account. If the same account also syncs a clipboard or a password store, rotate
+those from their own apps first — afterwards nothing can.
+
+## What the server knows
+
+| It sees | It does not see |
+|---|---|
+| that an account connected, and when | any note, ever |
+| how many bytes that account stores | any filename or folder name |
+| the size and hash of each sealed blob | which files changed, or how many |
+
+Two hashes make that hold. A blob's *address* is the SHA-256 of its
+**ciphertext**; the integrity check inside the sealed manifest is a BLAKE3 of
+the **plaintext**. Addressing by the plaintext hash would deduplicate across
+accounts and hand anyone with a copy of a suspected file a way to ask the
+server whether you have it.
+
+More in [docs/security.md](docs/security.md).
+
+## Documentation
+
+- **[Running your own relay](docs/self-hosting.md)** — the long version:
+  build, TLS, admission, backups, and pointing the plugin at it.
+- **[Troubleshooting](docs/troubleshooting.md)** — what each failure actually
+  means, including the ones that look like something else.
+- **[Security model](docs/security.md)** — what is protected, what is not, and
+  the decisions behind both.
+
+## Status
+
+Verified inside **Obsidian 1.13.7** on macOS by 91 automated assertions that
+drive two real copies of the application over the remote debugger — pairing,
+rotation, the recovery kit, conflict handling, 504 files published in 2.8 s and
+fetched in 1.5 s, and zero plaintext in the relay's own storage.
+
+Not yet done, and honest about it:
+
+- **Not tested on a phone.** The manifest claims mobile support and the code
+  has mobile-specific paths, but nothing has run there yet.
+- **Not reviewed by Obsidian staff**, and not in the community directory.
+- **No version history.** A superseded version of a note is not kept.
+- **A rename is a delete and a create**, so moving a large folder republishes
+  everything in it. Correct, and expensive.
+- **The merge is whole-file.** Two people editing different paragraphs of one
+  note produce a conflict copy, not a merged note.
+
+## Building from source
+
+The plugin is built on **OpenSync**, an end-to-end encrypted sync engine that
 lives in its own repository, checked out **beside** this one, not inside it:
 
 ```text
@@ -39,124 +181,41 @@ lives in its own repository, checked out **beside** this one, not inside it:
 └── opensync-obsidian/   this repository
 ```
 
-Every path into it is relative, so both have to be present to build. That is
-deliberate, and the alternative was worse: a copy of the engine per product
-drifts silently, and a disagreement between two copies of a wire format does
-not present as a compile error — it presents as lost data.
-
-## Build
-
 ```sh
+git clone https://github.com/open-sync/opensync.git
+git clone https://github.com/open-sync/opensync-obsidian.git
+cd opensync-obsidian
 npm install
-npm run build          # compiles the wasm core, then bundles src/ into main.js
+npm run build        # compiles the Rust core to wasm, then bundles src/
 npm run typecheck
 ```
 
-`main.js` is the built plugin and is not in version control. To try it, copy
-`main.js`, `manifest.json` and `styles.css` into
-`<your vault>/.obsidian/plugins/opensync/`, then enable OpenSync under
-Settings → Community plugins.
-
-## The hosted relay
-
-The plugin ships pointing at `wss://relay.opensync.network/`, and a build can
-name a different one — or none:
+`main.js` is the built plugin and is not in version control. To build one that
+points at your own relay, or at none:
 
 ```sh
-npm run build                                                  # the hosted relay
-OPENSYNC_HOSTED_RELAY=wss://relay.example.net/ npm run build   # somebody else's
-OPENSYNC_HOSTED_RELAY= npm run build                           # none
+OPENSYNC_HOSTED_RELAY=wss://relay.example.net/ npm run build
+OPENSYNC_HOSTED_RELAY= npm run build
 ```
 
-With a relay named, a fresh install already has the address and its blob
-endpoint filled in, and the plan applies. With it empty the desktop default is
-a relay on this machine, the mobile default is nothing, and no device is
-metered, because every user is running their own.
-
-The hosted relay **serves only accounts its operator has admitted**, so a fresh
-install that has not asked for access gets a refusal rather than a sync. That
-is a sentence the plugin shows — "this relay does not serve your account" — not
-a connection error, because the two need different answers.
-
-`npm run check:hosted` tests that path without a domain or a certificate
-authority: it stands TLS in front of the relay with a self-signed certificate,
-maps the hostname inside Obsidian's own resolver, and drives a real pairing and
-sync over `wss://` and `https://`. It is the only check that exercises TLS at
-all.
-
-**Name the relay for what it is, not for which one it is.** A device keeps the
-address that worked, so the hostname in a build is effectively permanent for
-every install made from it — a `relay01` would bake today's topology into
-installs that can never be told otherwise. `relay.opensync.network` is one
-stable name with whatever you like behind it, which is the version that lets
-you move.
-
-## Verify
+### Running the checks
 
 ```sh
 cargo build --release -p opensync-relay --manifest-path ../opensync/Cargo.toml
-npm run build
-npm run check:obsidian
+npm run check:all
 ```
 
-`checks/obsidiancheck.mjs` drives **the real application**: it starts a relay
-on a port the OS hands out, builds two vaults with this plugin installed,
-launches two isolated copies of Obsidian, and works the settings pane the way
-a person does — press the button, read what the screen says. It never touches
-the Obsidian you use; each copy gets its own `--user-data-dir`, so running it
-while yours is open is fine.
+Three suites, all of which drive the real application rather than standing in
+for it. Each starts its own relay on a port the OS hands out, builds vaults
+under a temporary directory, and gives each Obsidian its own
+`--user-data-dir` — so they never touch the Obsidian you use, and running them
+while it is open is fine.
 
-Everything else about this product is proved by a test that stands in for the
-application. `opensync/checks/plugincheck.ts` mirrors `runSync()` line for
-line against a real relay, and the Rust suite proves the protocol underneath
-it. What none of them can say is whether Obsidian loads the plugin, whether
-the settings pane renders, whether a QR appears on a canvas, or whether the
-vault API writes a file where the manifest says it goes.
-
-Four of the things this repository does differently were found by running it:
-
-- **Rotation reported into a box its own re-render emptied.** The pane
-  rebuilds at the end so the new key appears in its field, and that erased
-  "published 3 files", "swept 4 blobs" and "pair your devices again" a
-  millisecond after they were written — on the one operation here that cannot
-  be undone. The report is now handed to the next render instead.
-- **A conflict copy said `from This device`.** Both devices shipped the same
-  default label, so both sides of a fork were named the same thing. The
-  default is now the vault's own name.
-- **And then it named the wrong device.** The copy holds the *incoming*
-  version — the local side keeps the path — but the only device name a
-  merging device knows is its own, so every copy was labelled with the machine
-  the reader was already sitting at. Fixed in the engine rather than here: a
-  manifest now carries the name of the device that published it, sealed with
-  everything else, and the copy is named from that. A manifest that names no
-  device produces `from another device`, which is vague and true, rather than
-  a name that is specific and wrong.
-- **A conflict copy made this morning was dated yesterday.** `toISOString` is
-  UTC, and this date goes in a filename someone reads to work out which of two
-  files is newer. It is now the date on this device's own clock.
-
-## Screenshots
-
-```sh
-npm run shots          # docs/screenshots, plus the log and the numbers
-```
-
-`checks/capture.mjs` photographs thirteen states of the running app — the same
-harness, driven to each state and asked to hold still. It also writes what it
-measured (`capture.json`) and, at the end, searches the relay's own storage for
-words from the notes, the vault paths, and a token generated for that run: a
-relay holding plaintext would be holding that exact string.
-
-## What is covered
-
-Loading in Obsidian, the settings pane, generating keys, publishing a vault,
-pairing over a ten-character code and over a pasted `opensync://pair…` line,
-the QR that carries it, reading a note written before this device had any
-keys, edits, binary attachments, deletes, a genuine fork resolving to a
-conflict copy with neither side lost, repeat syncs being inert, the recovery
-kit rendering and parsing back, the pointer and merge base surviving a
-restart, and a rotation: two presses, a re-sealed vault, a swept relay, a
-locked-out device that loses nothing, and re-pairing it afterwards.
+| Check | What it covers |
+|---|---|
+| `check:obsidian` | loading, the settings pane, pairing, edits, attachments, deletes, conflicts, restart persistence, rotation |
+| `check:tiers` | the free and paid plans, and every path where one could delete the other's files |
+| `check:hosted` | the shipping default over real TLS, with the hostname mapped inside the browser |
 
 ## License
 

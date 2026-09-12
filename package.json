@@ -7,10 +7,10 @@
     "wasm": "npm --prefix ../opensync/packages/client run wasm",
     "build": "npm run wasm && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "check:obsidian": "node scripts/build.mjs && node checks/obsidiancheck.mjs",
+    "check:obsidian": "OPENSYNC_HOSTED_RELAY= node scripts/build.mjs && node checks/obsidiancheck.mjs",
     "shots": "node checks/capture.mjs docs/screenshots",
-    "check:tiers": "node scripts/build.mjs && node checks/tierscheck.mjs",
-    "check:hosted": "OPENSYNC_HOSTED_RELAY=wss://relay.opensync.network/ node scripts/build.mjs && node checks/hostedcheck.mjs",
+    "check:tiers": "OPENSYNC_HOSTED_RELAY= node scripts/build.mjs && node checks/tierscheck.mjs",
+    "check:hosted": "node scripts/build.mjs && node checks/hostedcheck.mjs",
     "check:all": "npm run check:obsidian && npm run check:tiers && npm run check:hosted"
   },
   "devDependencies": {

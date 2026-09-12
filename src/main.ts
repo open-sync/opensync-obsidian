@@ -842,8 +842,9 @@ class OpenSyncSettingTab extends PluginSettingTab {
             ? "Images, PDFs, audio and everything else in the vault. Notes sync either way."
             : "You are syncing through your own relay, so your storage is your own and nothing here is limited. Notes sync either way."
           : "Notes, canvases and the other text your vault is written in sync free and unlimited. " +
-            "Images, PDFs and audio are what actually cost storage to keep, so they are part of the paid plan. " +
-            "Nothing is deleted either way — an attachment simply stays on the device it is on.",
+            "Images, PDFs and audio are what actually cost storage to keep, so they are part of the paid plan — " +
+            "or point this at a relay of your own, where the storage is yours and nothing here is limited. " +
+            "Nothing is deleted either way: an attachment simply stays on the device it is on.",
       )
       .addToggle((t) =>
         t
