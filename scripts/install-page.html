@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSync for Obsidian — test build</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --card: #fff; --sunk: #f2f0ec;
+    --ink: #17161a; --body: #3c3a42; --muted: #6d6a75; --line: #e3e0da;
+    --accent: #2f6f5e; --accent-soft: #e6f0ec;
+    --warn: #8a5a12; --warn-soft: #fbf0dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131316; --card: #1b1b1f; --sunk: #17171b;
+      --ink: #f4f3f0; --body: #cdcbd3; --muted: #93909b; --line: #2c2c32;
+      --accent: #6ec2a8; --accent-soft: #17231f;
+      --warn: #d9a44e; --warn-soft: #251d10;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--body);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 27px; line-height: 1.2; margin: 0 0 6px; color: var(--ink); letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--muted); margin: 36px 0 12px; font-weight: 600;
+  }
+  h3 { font-size: 18px; color: var(--ink); margin: 0 0 8px; letter-spacing: -0.01em; }
+  p { margin: 0 0 12px; }
+  a { color: var(--accent); }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.88em; background: var(--sunk); padding: 2px 6px;
+    border-radius: 4px; color: var(--ink); overflow-wrap: anywhere;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 18px 6px; margin: 0 0 14px;
+  }
+  .card.lead { border-color: var(--accent); }
+  .dl {
+    display: block; background: var(--accent); color: #fff; text-decoration: none;
+    text-align: center; padding: 15px; border-radius: 10px; font-weight: 600;
+    margin: 14px 0 8px; font-size: 17px;
+  }
+  .dl small { display: block; font-weight: 400; opacity: .85; font-size: 13px; margin-top: 2px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; margin: 8px 0 14px; }
+  th, td { text-align: left; padding: 9px 10px 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  td.yes { color: var(--accent); font-weight: 600; }
+  td.no { color: var(--muted); }
+  ol { padding-left: 22px; margin: 0 0 12px; }
+  ol li { margin-bottom: 10px; }
+  .field {
+    display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+    padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14.5px;
+  }
+  .field:last-child { border-bottom: 0; }
+  .field b { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  .field span { text-align: right; }
+  .copy {
+    background: var(--sunk); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px;
+    color: var(--ink); overflow-wrap: anywhere; margin: 6px 0 12px; cursor: pointer;
+  }
+  .copy:active { background: var(--accent-soft); }
+  .note {
+    background: var(--warn-soft); border-left: 3px solid var(--warn);
+    padding: 12px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14.5px;
+  }
+  .note b { color: var(--warn); }
+  .check { display: flex; gap: 11px; align-items: flex-start; padding: 8px 0; }
+  .check input { margin: 4px 0 0; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
+  .check label { font-size: 15px; line-height: 1.45; }
+  .check .why { display: block; color: var(--muted); font-size: 13.5px; }
+  .check input:checked + label { color: var(--muted); }
+  footer { color: var(--muted); font-size: 13px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>OpenSync for Obsidian</h1>
+  <p class="sub">Test build · syncs through <span class="mono">__HOST__</span> on your tailnet</p>
+
+  <div class="note">
+    <b>There is no app to download.</b> This is a plugin that runs inside
+    Obsidian. Install Obsidian from the App&nbsp;Store or Play&nbsp;Store first,
+    make or open a vault, then come back here.
+  </div>
+
+  <h2>What is free and what is paid</h2>
+  <table>
+    <thead><tr><th></th><th>Free</th><th>Supporter</th><th>Own relay</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Notes, canvas, Bases, Excalidraw, CSV, SVG</td>
+        <td class="yes">unlimited</td><td class="yes">unlimited</td><td class="yes">unlimited</td>
+      </tr>
+      <tr>
+        <td>Images, PDFs, audio, video</td>
+        <td class="no">stay put</td><td class="yes">synced</td><td class="yes">synced</td>
+      </tr>
+      <tr>
+        <td>Devices, pairing, rotation, recovery kit</td>
+        <td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="font-size:14.5px">
+    Notes weigh almost nothing — a 500-note vault is about 5&nbsp;MB — so
+    carrying them is free. Attachments are the only part that costs real money
+    to keep, so they are the part that is paid for. <b>Nothing is ever deleted
+    by a plan:</b> a file the plan does not carry simply stays on the device it
+    is already on.
+  </p>
+  <p style="font-size:14.5px">
+    This build is pointed at a relay on the MacBook, so it behaves as the paid
+    product does — and its settings pane has a <b>Plan</b> control so you can be
+    either tier. That control does not exist in a release.
+  </p>
+
+  <h2>Get the plugin</h2>
+  <a class="dl" href="/opensync-plugin.zip">
+    Download opensync-plugin.zip
+    <small>__ZIP_SIZE__ · unzips to a folder called <span class="mono">opensync</span></small>
+  </a>
+
+  <div class="card lead">
+    <h3>iPad</h3>
+    <ol>
+      <li>Tap the button above. Safari saves it to <b>Files → Downloads</b>.</li>
+      <li>Open <b>Files</b>, tap the zip once — it unzips beside itself.</li>
+      <li>Go to <b>On My iPad → Obsidian → your vault → .obsidian → plugins</b>.
+        If <span class="mono">plugins</span> is not there, make it.</li>
+      <li>Drag the <span class="mono">opensync</span> folder into it.</li>
+      <li>In Obsidian: <b>Settings → Community plugins → turn off Restricted
+        mode</b>, then enable <b>OpenSync</b>. Reload the vault if it does not
+        appear.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>Android</h3>
+    <ol>
+      <li>Tap the button above, then open the download.</li>
+      <li>Extract it with your file manager.</li>
+      <li>Move the <span class="mono">opensync</span> folder into
+        <span class="mono">&lt;vault&gt;/.obsidian/plugins/</span> — turn on
+        “show hidden files” if <span class="mono">.obsidian</span> is not
+        visible.</li>
+      <li>In Obsidian: <b>Settings → Community plugins</b>, turn off Restricted
+        mode, enable <b>OpenSync</b>.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>MacBook</h3>
+    <p>One line, with the vault path filled in:</p>
+    <div class="copy" onclick="navigator.clipboard?.writeText(this.textContent.trim())">curl -sL __PAGE__opensync-plugin.zip -o /tmp/p.zip &amp;&amp; unzip -oq /tmp/p.zip -d "$VAULT/.obsidian/plugins/"</div>
+    <p style="font-size:14px;color:var(--muted)">
+      Set <span class="mono">VAULT</span> first, e.g.
+      <span class="mono">export VAULT=~/Documents/MyVault</span>. Then enable it
+      under Settings → Community plugins.
+    </p>
+  </div>
+
+  <h2>Point it at the relay</h2>
+  <p>
+    Already filled in on a fresh install — check it matches, in
+    <b>Settings → OpenSync</b>:
+  </p>
+  <div class="card">
+    <div class="field"><b>Relay address</b><span class="mono">__RELAY_WS__</span></div>
+    <div class="field"><b>Storage address</b><span class="mono">__RELAY_HTTP__</span></div>
+  </div>
+  <div class="note">
+    Every device has to be signed into the same tailnet for those to resolve.
+    If a sync says it cannot reach the relay, that is the first thing to check.
+  </div>
+
+  <h2>First device, then the others</h2>
+  <div class="card">
+    <h3>On the MacBook, once</h3>
+    <ol>
+      <li><b>Settings → OpenSync</b>, press <b>Generate</b> beside <i>Vault
+        key</i>, then beside <i>Account key</i>.</li>
+      <li>Press <b>Recovery kit → Show it</b> and photograph it. It is the only
+        way back if every device is lost.</li>
+      <li>Make a note. The status bar should reach <b>OpenSync: up to
+        date</b>.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>On the iPad and the phone</h3>
+    <ol>
+      <li>On the MacBook: <b>Add a device → Show a code</b>.</li>
+      <li>On the iPad, scan the QR with the camera. On the phone, same.</li>
+      <li>Or paste the <span class="mono">opensync://pair…</span> line into
+        <i>Join from a code</i> and press <b>Join</b>.</li>
+    </ol>
+    <p style="font-size:14px;color:var(--muted)">
+      One code, one device, one attempt — right or wrong. Show a new one for
+      the second device.
+    </p>
+  </div>
+
+  <h2>What to try</h2>
+  <p style="font-size:14.5px">Ticks are kept in this browser, per device.</p>
+  <div class="card" id="checks">
+    <div class="check"><input type="checkbox" id="c1"><label for="c1">A note typed on one device appears on the other two<span class="why">Within a couple of minutes, or immediately with <i>Sync now</i> from the command palette</span></label></div>
+    <div class="check"><input type="checkbox" id="c2"><label for="c2">Edit the same note on two devices while one is offline<span class="why">Expect both versions kept — one keeps the name, the other becomes “(conflict … from <i>device</i>)”, named after the device whose text is inside it</span></label></div>
+    <div class="check"><input type="checkbox" id="c3"><label for="c3">On <b>Free</b>, add an image to the vault<span class="why">It should not sync, and the settings pane should list it by name as held back. Nothing is deleted anywhere.</span></label></div>
+    <div class="check"><input type="checkbox" id="c4"><label for="c4">Switch that device to <b>Supporter</b> and sync<span class="why">The image now travels. Switch it back to Free afterwards — nothing should disappear on any device.</span></label></div>
+    <div class="check"><input type="checkbox" id="c5"><label for="c5">Mismatch the tiers deliberately: iPad on Supporter, phone on Free<span class="why">The phone must not delete the iPad’s attachments, and the iPad must not delete anything either</span></label></div>
+    <div class="check"><input type="checkbox" id="c6"><label for="c6">Delete a note on the phone<span class="why">It should disappear on the other two</span></label></div>
+    <div class="check"><input type="checkbox" id="c7"><label for="c7">Rename a folder with several notes in it<span class="why">Slow but lossless — watch what it costs</span></label></div>
+    <div class="check"><input type="checkbox" id="c8"><label for="c8">Put the iPad in aeroplane mode, edit, bring it back<span class="why">The edit should reach the others when it reconnects</span></label></div>
+    <div class="check"><input type="checkbox" id="c9"><label for="c9">Close Obsidian on the phone mid-sync and reopen it<span class="why">No half-written files, no conflict copies invented out of nothing</span></label></div>
+    <div class="check"><input type="checkbox" id="c10"><label for="c10">A note with an emoji, a space and a non-Latin name<span class="why">Arrives with its name intact</span></label></div>
+    <div class="check"><input type="checkbox" id="c11"><label for="c11">Show the recovery kit on the iPad<span class="why">It should render and say “Reads back as account …”, which is the page proving itself</span></label></div>
+    <div class="check"><input type="checkbox" id="c12"><label for="c12">Leave all three running for a day<span class="why">The thing no scripted test can do. Check for surprise conflict copies.</span></label></div>
+  </div>
+
+  <h2>If something goes wrong</h2>
+  <div class="card">
+    <div class="field"><b>“nothing answered that code”</b><span>The code was already used, or the device cannot reach the relay. Show a new one.</span></div>
+    <div class="field"><b>Status bar says “error”</b><span>Relay unreachable — check Tailscale is connected on that device.</span></div>
+    <div class="field"><b>“quota exceeded”</b><span>The account is not admitted on the relay, or it is genuinely full.</span></div>
+    <div class="field"><b>Attachment not syncing</b><span>Expected on Free. The pane lists what is held back.</span></div>
+    <div class="field"><b>Plugin not listed</b><span>Restricted mode is on, or the folder is in the wrong place. It must be <span class="mono">.obsidian/plugins/opensync/</span> with all three files in it.</span></div>
+  </div>
+
+  <footer>
+    Test build. Not a release, not in the community directory, and not audited.
+    The <b>Plan</b> control and this relay address exist only here.
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var boxes = [].slice.call(document.querySelectorAll("#checks input"));
+    var KEY = "opensync-device-test";
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      boxes.forEach(function (b) { if (saved[b.id]) b.checked = true; });
+    } catch (e) { /* private window */ }
+    boxes.forEach(function (b) {
+      b.addEventListener("change", function () {
+        try {
+          var out = {};
+          boxes.forEach(function (x) { if (x.checked) out[x.id] = 1; });
+          localStorage.setItem(KEY, JSON.stringify(out));
+        } catch (e) { /* nothing to do */ }
+      });
+    });
+  })();
+</script>
+</body>
+</html>

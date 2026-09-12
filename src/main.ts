@@ -42,6 +42,30 @@ import {
  * `.excalidraw.md` and `.canvas` are Obsidian's own; `.json`, `.csv`, `.svg`,
  * `.yaml` and `.bib` are what the common plugins write beside them.
  */
+/**
+ * What to say when somebody turns attachments off.
+ *
+ * Not "your files will be deleted": on devices running this version they will
+ * not, and a warning that overstates is one people learn to dismiss. The
+ * manifest declares the extensions its publisher was carrying, and a reader
+ * treats a missing path as a deletion *only inside that scope* — so narrowing
+ * what this device offers no longer reads as "delete the rest".
+ *
+ * The risk that remains is version skew, and it is real rather than
+ * theoretical: it was measured on two real vaults before the scope existed.
+ * A device still running an older plugin has no scope to read, so it treats
+ * every path absent from the manifest as deleted — and it moved the
+ * attachment to the trash with the status bar reading "up to date". The
+ * warning names that condition rather than the general case, because the
+ * general case is safe and the specific one is not.
+ */
+const TURNING_OFF_WARNING =
+  "Attachments will stop being published from this device. Nothing is deleted " +
+  "by a device running this version — but one still on an older plugin cannot " +
+  "read the manifest's scope, and will treat the attachments it no longer sees " +
+  "as deleted and move them to the trash. Update every device before you sync, " +
+  "or leave this on until you have.";
+
 const FREE_EXTENSIONS = [
   "md",         // notes, and Excalidraw drawings, which are markdown
   "canvas",     // Obsidian Canvas
@@ -68,6 +92,16 @@ const FREE_EXTENSIONS = [
  * day the free plan starts meaning anything, and not before.
  */
 declare const __HOSTED_RELAY__: string;
+/**
+ * Is this a build made for someone to test?
+ *
+ * The plan will come from the account once there is one. Until then a tester
+ * asked to check what the free tier does and what the paid tier does has no
+ * way to be either, so a test build says which it is and lets them switch.
+ * Off in anything released, where the control would be a lie: flipping a
+ * setting does not pay for storage, and the relay meters bytes regardless.
+ */
+declare const __TEST_BUILD__: boolean;
 const HOSTED_RELAY = __HOSTED_RELAY__;
 
 /** The blob endpoint beside a relay: same host, the other scheme. */
@@ -853,9 +887,20 @@ class OpenSyncSettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             this.plugin.settings.syncAttachments = v;
             await this.plugin.saveSettings();
+            // Warned on the way *down* only, because that is the direction
+            // that can cost somebody a file. See `TURNING_OFF_WARNING`.
+            if (!v) new Notice(TURNING_OFF_WARNING, 12000);
             this.display();
           }),
       );
+
+    if (supporter && !this.plugin.settings.syncAttachments) {
+      // The same sentence the toggle says on the way down, left on the pane
+      // afterwards. A warning that appears for eight seconds and is gone is a
+      // warning nobody can re-read while they decide whether to sync.
+      const caution = containerEl.createEl("div", { cls: "opensync-pairing" });
+      caution.createEl("p", { text: TURNING_OFF_WARNING });
+    }
 
     if (!supporter && held.length > 0) {
       // Said out loud rather than discovered. A file that silently does not
@@ -871,6 +916,27 @@ class OpenSyncSettingTab extends PluginSettingTab {
         text: held.slice(0, 5).join(", ") + (held.length > 5 ? `, and ${held.length - 5} more` : ""),
         cls: "opensync-invite",
       });
+    }
+
+    if (__TEST_BUILD__) {
+      new Setting(containerEl)
+        .setName("Plan (test build only)")
+        .setDesc(
+          "Which plan to pretend this account is on, so both tiers can be tried. " +
+            "It changes what this device offers to upload and nothing else — the relay meters bytes " +
+            "either way, and this control is not in a released build.",
+        )
+        .addDropdown((d) =>
+          d
+            .addOption("free", "Free — notes only")
+            .addOption("supporter", "Supporter — attachments too")
+            .setValue(this.plugin.settings.plan)
+            .onChange(async (v) => {
+              this.plugin.settings.plan = v === "supporter" ? "supporter" : "free";
+              await this.plugin.saveSettings();
+              this.display();
+            }),
+        );
     }
 
     new Setting(containerEl)

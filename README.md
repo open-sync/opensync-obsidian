@@ -145,6 +145,8 @@ More in [docs/security.md](docs/security.md).
 
 ## Documentation
 
+- **[Testing on real devices](docs/testing.md)** — getting a build onto a Mac,
+  an iPad and a phone over a tailnet, and what to try once it is there.
 - **[Running your own relay](docs/self-hosting.md)** — the long version:
   build, TLS, admission, backups, and pointing the plugin at it.
 - **[Troubleshooting](docs/troubleshooting.md)** — what each failure actually

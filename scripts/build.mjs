@@ -26,6 +26,7 @@ await esbuild.build({
     // Build for a different relay, or for none, by saying so:
     //   OPENSYNC_HOSTED_RELAY=wss://relay.example.net/ npm run build
     //   OPENSYNC_HOSTED_RELAY= npm run build
+    __TEST_BUILD__: JSON.stringify(process.env.OPENSYNC_TEST_BUILD === "1"),
     __HOSTED_RELAY__: JSON.stringify(
       process.env.OPENSYNC_HOSTED_RELAY ?? "wss://relay.opensync.network/",
     ),

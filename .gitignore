@@ -12,3 +12,5 @@ main.js
 .claude/
 .DS_Store
 *.log
+# Built by scripts/serve-for-devices.mjs for a device test.
+dist-install/
