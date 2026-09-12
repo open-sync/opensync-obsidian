@@ -221,4 +221,7 @@ while it is open is fine.
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+MIT. See [LICENSE](LICENSE).
+
+The engine this is built on is dual-licensed under MIT or Apache-2.0; MIT is
+the option taken here, so the two agree.

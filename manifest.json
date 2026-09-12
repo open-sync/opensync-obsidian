@@ -3,8 +3,8 @@
   "name": "OpenSync",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
-  "description": "End-to-end encrypted sync for your Obsidian vault. Notes sync free and unlimited, attachments are the paid tier, and you can point it at a relay you run yourself.",
+  "description": "Sync your vault across devices, end-to-end encrypted. Notes sync free and unlimited; attachments are the paid tier, or free on a relay you run yourself.",
   "author": "OpenSync",
-  "authorUrl": "https://github.com/open-sync/opensync-obsidian",
+  "authorUrl": "https://github.com/open-sync",
   "isDesktopOnly": false
 }
