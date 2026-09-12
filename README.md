@@ -191,22 +191,32 @@ Not yet done, and honest about it:
 
 ## Building from source
 
-The plugin is built on **OpenSync**, an end-to-end encrypted sync engine that
-lives in its own repository, checked out **beside** this one, not inside it:
-
-```text
-.
-├── opensync/            the engine
-└── opensync-obsidian/   this repository
-```
-
 ```sh
-git clone https://github.com/open-sync/opensync.git
 git clone https://github.com/open-sync/opensync-obsidian.git
 cd opensync-obsidian
 npm install
-npm run build        # compiles the Rust core to wasm, then bundles src/
+npm run build
 npm run typecheck
+```
+
+That is the whole thing — one repository, no toolchain beyond Node. The
+build is reproducible: a clean checkout produces a `main.js` byte-identical
+to the one attached to the release.
+
+The plugin is built on **OpenSync**, an end-to-end encrypted sync engine that
+lives in its own repository. Its browser client is **vendored** here, under
+[`vendor/opensync-client/`](vendor/opensync-client/), copied verbatim by
+`npm run vendor`. That copy is why this repository builds alone, and
+`npm run vendor:check` — which the test suite runs — fails if it has drifted
+from the engine.
+
+`vendor/opensync-client/wasm/inline.ts` is the compiled Rust core as base64.
+It is generated, not written, and its source is the `opensync-*` crates in the
+engine repository. To rebuild it you need the engine checked out beside this
+repository and a Rust toolchain:
+
+```sh
+npm run wasm         # recompile the core to wasm, then re-vendor
 ```
 
 `main.js` is the built plugin and is not in version control. To build one that

@@ -25,7 +25,10 @@ import {
   Relay,
   renderRecoveryKit,
   Signer,
-} from "../../opensync/packages/client/src";
+// Vendored, not reached across a sibling checkout: this repository has to
+// build on its own, for a reviewer and for the directory's build check.
+// `npm run vendor` refreshes it; `npm run vendor:check` fails if it drifts.
+} from "../vendor/opensync-client";
 
 /**
  * What the free plan carries: the file types a vault is *written* in, as

@@ -4,14 +4,16 @@
   "description": "Free, end-to-end encrypted sync for Obsidian vaults.",
   "main": "main.js",
   "scripts": {
-    "wasm": "npm --prefix ../opensync/packages/client run wasm",
-    "build": "npm run wasm && node scripts/build.mjs",
+    "wasm": "npm --prefix ../opensync/packages/client run wasm && npm run vendor",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "check:obsidian": "OPENSYNC_HOSTED_RELAY= node scripts/build.mjs && node checks/obsidiancheck.mjs",
     "shots": "node checks/capture.mjs docs/screenshots",
     "check:tiers": "OPENSYNC_HOSTED_RELAY= node scripts/build.mjs && node checks/tierscheck.mjs",
     "check:hosted": "node scripts/build.mjs && node checks/hostedcheck.mjs",
-    "check:all": "npm run check:obsidian && npm run check:tiers && npm run check:hosted"
+    "check:all": "npm run vendor:check && npm run check:obsidian && npm run check:tiers && npm run check:hosted",
+    "vendor": "node scripts/vendor-client.mjs",
+    "vendor:check": "node scripts/vendor-client.mjs --check"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
