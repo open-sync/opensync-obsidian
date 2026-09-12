@@ -7,3 +7,8 @@ data.json
 # The built plugin. It is what gets copied into a vault, and it is rebuilt
 # from src/ by `npm run build`.
 main.js
+
+# Never public: session state, editor droppings, logs.
+.claude/
+.DS_Store
+*.log

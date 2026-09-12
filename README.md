@@ -30,13 +30,12 @@ inside the sealed manifest and every blob is ciphertext.
 
 ## The engine is a separate repository
 
-This product is built on **OpenSync**, an end-to-end encrypted sync engine
-that lives in `openapps/opensync` — checked out **beside** this repository,
-not inside it:
+This plugin is built on **OpenSync**, an end-to-end encrypted sync engine that
+lives in its own repository, checked out **beside** this one, not inside it:
 
 ```text
-openapps/
-├── opensync/           the engine
+.
+├── opensync/            the engine
 └── opensync-obsidian/   this repository
 ```
 
