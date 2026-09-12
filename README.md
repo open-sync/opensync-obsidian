@@ -127,6 +127,23 @@ One warning the pane also gives you: one key covers every namespace on the
 account. If the same account also syncs a clipboard or a password store, rotate
 those from their own apps first — afterwards nothing can.
 
+## What this plugin reads
+
+**Every file in your vault.** It has to: syncing a vault means knowing what is
+in it. The plugin enumerates the vault on each sync, reads the files it is
+carrying, and seals them before anything leaves the device. It reads nothing
+outside the vault, and on the free plan it reads only the file types listed
+above.
+
+**One remote service, and only the one you name.** The relay in *Settings →
+OpenSync*, which is `relay.opensync.network` unless you change it. Nothing else
+is contacted: no analytics, no update check, no telemetry of any kind. Point it
+at your own relay and this plugin talks to nobody else at all.
+
+**An account is needed for the hosted relay**, because a relay that serves
+anonymous keys is a free file host. None is needed to use the plugin against
+your own.
+
 ## What the server knows
 
 | It sees | It does not see |

@@ -252,7 +252,9 @@ export default class OpenSyncPlugin extends Plugin {
 
     this.addSettingTab(new OpenSyncSettingTab(this.app, this));
     this.addCommand({
-      id: "opensync-sync-now",
+      // Not "opensync-sync-now": Obsidian prefixes the plugin id itself, and
+      // repeating it gives the palette "OpenSync: OpenSync sync now".
+      id: "sync-now",
       name: "Sync now",
       callback: () => void this.sync(true),
     });
@@ -898,7 +900,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
       // The same sentence the toggle says on the way down, left on the pane
       // afterwards. A warning that appears for eight seconds and is gone is a
       // warning nobody can re-read while they decide whether to sync.
-      const caution = containerEl.createEl("div", { cls: "opensync-pairing" });
+      const caution = containerEl.createDiv({ cls: "opensync-pairing" });
       caution.createEl("p", { text: TURNING_OFF_WARNING });
     }
 
@@ -906,7 +908,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
       // Said out loud rather than discovered. A file that silently does not
       // sync is indistinguishable from a file that failed to sync, and the
       // second one is the bug report.
-      const note = containerEl.createEl("div", { cls: "opensync-pairing" });
+      const note = containerEl.createDiv({ cls: "opensync-pairing" });
       note.createEl("p", {
         text: `${held.length} file${held.length === 1 ? "" : "s"} in this vault ${
           held.length === 1 ? "is" : "are"
@@ -961,7 +963,7 @@ class OpenSyncSettingTab extends PluginSettingTab {
     const settings = this.plugin.settings;
     const enrolled = Boolean(settings.accountSecret && settings.namespaceKey);
     new Setting(containerEl).setName(enrolled ? "Your devices" : "Set up").setHeading();
-    const status = containerEl.createEl("div", { cls: "opensync-pairing" });
+    const status = containerEl.createDiv({ cls: "opensync-pairing" });
     for (const line of this.carry) status.createEl("p", { text: line });
     this.carry = [];
     // Rotation is irreversible and destroys access for every device that is
