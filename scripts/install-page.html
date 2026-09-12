@@ -128,10 +128,33 @@
   </p>
 
   <h2>Get the plugin</h2>
-  <a class="dl" href="/opensync-plugin.zip">
-    Download opensync-plugin.zip
-    <small>__ZIP_SIZE__ · unzips to a folder called <span class="mono">opensync</span></small>
+  <p style="font-size:14.5px">
+    Two builds. They differ in one thing — which relay the plugin already knows
+    about. Everything else is identical, and both carry the <b>Plan</b> control.
+  </p>
+
+  <a class="dl" href="/opensync-tailnet.zip">
+    Download — relay on this MacBook
+    <small>__ZIP_SIZE__ · <span class="mono">__HOST__</span> · nothing to admit, works now</small>
   </a>
+  <p style="font-size:14px;color:var(--muted);margin:-2px 0 18px">
+    Start here. The relay is on the tailnet, so there is no server to set up and
+    no account to admit. Best for trying both tiers and every conflict case.
+  </p>
+
+  <a class="dl" style="background:var(--card);color:var(--accent);border:1px solid var(--accent)" href="/opensync-production.zip">
+    Download — the real relay
+    <small style="opacity:1;color:var(--muted)">__PROD_SIZE__ · <span class="mono">relay.opensync.network</span> · needs the account admitted</small>
+  </a>
+  <div class="note">
+    <b>The production relay keeps a roster.</b> It answers
+    <span class="mono">restricted_writes: true</span>, which means it stores
+    nothing for an account nobody has admitted. Generate the keys, then on the
+    relay's host run
+    <span class="mono">opensync-relay relay.toml admit &lt;npub&gt;</span> —
+    the npub is on the recovery kit. Until then syncing will fail, and it will
+    look like a quota error.
+  </div>
 
   <div class="card lead">
     <h3>iPad</h3>
@@ -174,16 +197,26 @@
 
   <h2>Point it at the relay</h2>
   <p>
-    Already filled in on a fresh install — check it matches, in
-    <b>Settings → OpenSync</b>:
+    Already filled in on a fresh install — whichever build you took. Check it
+    matches in <b>Settings → OpenSync</b>:
   </p>
   <div class="card">
+    <h3 style="font-size:15px">If you took the tailnet build</h3>
     <div class="field"><b>Relay address</b><span class="mono">__RELAY_WS__</span></div>
     <div class="field"><b>Storage address</b><span class="mono">__RELAY_HTTP__</span></div>
   </div>
+  <div class="card">
+    <h3 style="font-size:15px">If you took the production build</h3>
+    <div class="field"><b>Relay address</b><span class="mono">__PROD_RELAY_WS__</span></div>
+    <div class="field"><b>Storage address</b><span class="mono">__PROD_RELAY_HTTP__</span></div>
+  </div>
+  <p style="font-size:14px;color:var(--muted)">
+    You can also just type the other one into these two fields — the build only
+    decides what a fresh install starts with, not what it is stuck with.
+  </p>
   <div class="note">
-    Every device has to be signed into the same tailnet for those to resolve.
-    If a sync says it cannot reach the relay, that is the first thing to check.
+    The tailnet addresses only resolve on devices signed into the tailnet. If a
+    sync says it cannot reach the relay, that is the first thing to check.
   </div>
 
   <h2>First device, then the others</h2>

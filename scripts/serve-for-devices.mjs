@@ -45,41 +45,62 @@ const relayWs = `wss://${host}:${RELAY_HTTPS}/`;
 const relayHttp = `https://${host}:${RELAY_HTTPS}`;
 const pageUrl = `https://${host}:${PAGE_HTTPS}/`;
 
-// ---- build the plugin these devices will run -------------------------------
-console.log(`building a test build pointed at ${relayWs}`);
-execFileSync("node", ["scripts/build.mjs"], {
-  cwd: REPO,
-  stdio: "inherit",
-  env: { ...process.env, OPENSYNC_TEST_BUILD: "1", OPENSYNC_HOSTED_RELAY: relayWs },
-});
-
-// ---- one zip, shaped the way a vault wants it ------------------------------
+// ---- two builds, because there are two things worth testing ----------------
+//
+// They differ in one constant: which relay the plugin ships pointing at. The
+// tailnet one needs no server and no account admitted, so both tiers can be
+// exercised in a minute. The production one is the real path — the relay that
+// ships in a release — and its roster has to know the account before it will
+// store anything.
+//
 // Zipped from inside the folder, so unzipping gives `opensync/` with the three
-// files in it — which is exactly what goes into `.obsidian/plugins/`.
-const stage = join(REPO, "dist-install", "opensync");
-mkdirSync(stage, { recursive: true });
-for (const f of ["main.js", "manifest.json", "styles.css"]) {
-  writeFileSync(join(stage, f), readFileSync(join(REPO, f)));
+// files in it, which is exactly what goes into `.obsidian/plugins/`.
+function buildZip(name, hostedRelay) {
+  console.log(`building ${name} → ${hostedRelay}`);
+  execFileSync("node", ["scripts/build.mjs"], {
+    cwd: REPO,
+    stdio: "inherit",
+    env: { ...process.env, OPENSYNC_TEST_BUILD: "1", OPENSYNC_HOSTED_RELAY: hostedRelay },
+  });
+  const stage = join(REPO, "dist-install", name, "opensync");
+  mkdirSync(stage, { recursive: true });
+  for (const f of ["main.js", "manifest.json", "styles.css"]) {
+    writeFileSync(join(stage, f), readFileSync(join(REPO, f)));
+  }
+  const zip = join(REPO, "dist-install", `${name}.zip`);
+  spawnSync("zip", ["-qr", zip, "opensync"], { cwd: join(REPO, "dist-install", name) });
+  return { zip, size: `${(statSync(zip).size / 1024 / 1024).toFixed(1)} MB` };
 }
-const zip = join(REPO, "dist-install", "opensync-plugin.zip");
-spawnSync("zip", ["-qr", zip, "opensync"], { cwd: join(REPO, "dist-install") });
-const zipSize = (statSync(zip).size / 1024 / 1024).toFixed(1);
+
+const PRODUCTION_RELAY = process.env.OPENSYNC_PRODUCTION_RELAY ?? "wss://relay.opensync.network/";
+const tailnetBuild = buildZip("opensync-tailnet", relayWs);
+const productionBuild = buildZip("opensync-production", PRODUCTION_RELAY);
+const zipSize = tailnetBuild.size;
 
 const page = readFileSync(join(REPO, "scripts", "install-page.html"), "utf8")
   .replaceAll("__RELAY_WS__", relayWs)
   .replaceAll("__RELAY_HTTP__", relayHttp)
-  .replaceAll("__ZIP_SIZE__", `${zipSize} MB`)
+  .replaceAll("__ZIP_SIZE__", zipSize)
+  .replaceAll("__PROD_SIZE__", productionBuild.size)
+  .replaceAll("__PROD_RELAY_WS__", PRODUCTION_RELAY)
+  .replaceAll("__PROD_RELAY_HTTP__", PRODUCTION_RELAY.replace(/^wss:/, "https:").replace(/\/$/, ""))
   .replaceAll("__PAGE__", pageUrl)
   .replaceAll("__HOST__", host);
 
 createServer((req, res) => {
-  if (req.url === "/opensync-plugin.zip") {
-    res.writeHead(200, {
-      "content-type": "application/zip",
-      "content-disposition": 'attachment; filename="opensync-plugin.zip"',
-    });
-    res.end(readFileSync(zip));
-    return;
+  for (const [route, built] of [
+    ["/opensync-plugin.zip", tailnetBuild],
+    ["/opensync-tailnet.zip", tailnetBuild],
+    ["/opensync-production.zip", productionBuild],
+  ]) {
+    if (req.url === route) {
+      res.writeHead(200, {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="${route.slice(1)}"`,
+      });
+      res.end(readFileSync(built.zip));
+      return;
+    }
   }
   if (req.url?.startsWith("/main.js") || req.url?.startsWith("/manifest.json") || req.url?.startsWith("/styles.css")) {
     const name = req.url.slice(1).split("?")[0];
@@ -94,8 +115,9 @@ createServer((req, res) => {
   res.end(page);
 }).listen(PAGE_PORT, "127.0.0.1", () => {
   console.log(`
-  page   http://127.0.0.1:${PAGE_PORT}   (local)
-  zip    ${zipSize} MB
+  page        http://127.0.0.1:${PAGE_PORT}   (local)
+  tailnet     ${tailnetBuild.size}  →  ${relayWs}
+  production  ${productionBuild.size}  →  ${PRODUCTION_RELAY}
 
   Put both in front of the tailnet, once:
 

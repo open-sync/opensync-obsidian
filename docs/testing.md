@@ -60,6 +60,36 @@ anyone_may_store_here  = true      # said out loud, because the relay refuses to
 In production that last pair becomes `admission = "roster"` and accounts are
 admitted by hand — see [self-hosting.md](self-hosting.md#4-decide-who-may-store-things).
 
+## Two builds, and which to take
+
+`serve-for-devices.mjs` produces both. They differ in one constant — the relay
+the plugin already knows about — and nothing else.
+
+| | Tailnet build | Production build |
+|---|---|---|
+| Relay | this machine, over `tailscale serve` | `wss://relay.opensync.network/` |
+| Needs a server | no | it is already running |
+| Needs the account admitted | no | **yes** — the roster is on |
+| Good for | both tiers, conflicts, offline cases | the path a real install takes |
+
+**Start with the tailnet one.** Nothing to provision, nothing to admit, and it
+is the only way to exercise a failure without involving production.
+
+**The production relay keeps a roster.** It answers `restricted_writes: true`,
+so it stores nothing for an account nobody has admitted. Generate the keys,
+take the npub off the recovery kit, and on the relay's host:
+
+```sh
+opensync-relay relay.toml admit npub1… "darius, android"
+```
+
+Until that happens syncing fails, and it fails looking like a quota error —
+which is the single most confusing thing about a first run against a rostered
+relay.
+
+Either way the build only decides what a *fresh* install starts with. Both
+addresses can be typed into the two settings fields at any time.
+
 ## What the test build does differently
 
 `scripts/serve-for-devices.mjs` builds with two flags a release never has:
