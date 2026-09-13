@@ -11,12 +11,15 @@
     "shots": "node checks/capture.mjs docs/screenshots",
     "check:tiers": "OPENSYNC_HOSTED_RELAY= node scripts/build.mjs && node checks/tierscheck.mjs",
     "check:hosted": "node scripts/build.mjs && node checks/hostedcheck.mjs",
-    "check:all": "npm run vendor:check && npm run check:obsidian && npm run check:tiers && npm run check:hosted",
+    "check:all": "npm run lint && npm run vendor:check && npm run check:obsidian && npm run check:tiers && npm run check:hosted",
     "vendor": "node scripts/vendor-client.mjs",
-    "vendor:check": "node scripts/vendor-client.mjs --check"
+    "vendor:check": "node scripts/vendor-client.mjs --check",
+    "lint": "eslint src vendor"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.4.2",
     "obsidian": "^1.7.2",
     "playwright-core": "^1.63.0",
     "typescript": "^5.6.0"

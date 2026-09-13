@@ -180,6 +180,22 @@ const DEFAULTS: OpenSyncSettings = {
   intervalSeconds: 120,
 };
 
+/**
+ * What `data.json` holds: the settings, plus the pointer and merge base that
+ * `saveState` keeps beside them. `loadData` is typed `any` by Obsidian, so this
+ * is the one place that says what comes back.
+ */
+type StoredState = Partial<OpenSyncSettings> & {
+  _pointer?: Pointer | null;
+  _base?: ManifestJson | null;
+};
+
+/** What the engine's merge hands back. */
+interface MergeOutcome {
+  merged: ManifestJson;
+  conflicts: { path: string; copy_path: string }[];
+}
+
 interface Pointer {
   root: string;
   generation: number;
@@ -287,7 +303,7 @@ export default class OpenSyncPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const stored = (await this.loadData()) ?? {};
+    const stored = ((await this.loadData()) ?? {}) as StoredState;
     this.settings = Object.assign({}, DEFAULTS, stored);
     // The label ends up in the name of every conflict copy, so a default that
     // is the same everywhere makes the copies useless: two devices both
@@ -480,16 +496,16 @@ export default class OpenSyncPlugin extends Plugin {
       const files = await this.readVault();
       fresh.ns.clear();
       for (const [path, bytes] of files) fresh.ns.stage(path, bytes);
-      const commit: Commit = fresh.ns.commit(
+      const commit = fresh.ns.commit(
         1n,
         BigInt(Math.floor(Date.now() / 1000)),
         this.settings.deviceLabel,
         this.scope,
-      );
+      ) as Commit;
       await this.publish(fresh.relay, commit);
       this.base = fresh.ns.openManifest(
         commit.blobs.find((b) => b.id === commit.root)!.bytes,
-      );
+      ) as ManifestJson;
       await this.saveState();
       onProgress(`Published ${files.size} file${files.size === 1 ? "" : "s"} under the new key.`);
 
@@ -543,15 +559,15 @@ export default class OpenSyncPlugin extends Plugin {
     const generation = (this.pointer?.generation ?? 0) + 1;
     // Sealed with this device's name in it, so the *other* device can name a
     // conflict copy after this one. Nothing here reads it back for ourselves.
-    const commit: Commit = ns.commit(
+    const commit = ns.commit(
       BigInt(generation),
       BigInt(Math.floor(Date.now() / 1000)),
       this.settings.deviceLabel,
       this.scope,
-    );
-    const ours: ManifestJson = ns.openManifest(
+    ) as Commit;
+    const ours = ns.openManifest(
       commit.blobs.find((b) => b.id === commit.root)!.bytes,
-    );
+    ) as ManifestJson;
 
     // Read before writing. Publishing first would replace a pointer this
     // device has never looked at, so a concurrent write would be overwritten
@@ -565,10 +581,10 @@ export default class OpenSyncPlugin extends Plugin {
       return;
     }
 
-    const incoming: Pointer = ns.openPointer(remoteHex);
+    const incoming = ns.openPointer(remoteHex) as Pointer;
     const theirsSealed = await relay.getBlob(incoming.root);
     if (!theirsSealed) throw new Error("the relay is advertising a manifest it does not hold");
-    const theirs: ManifestJson = ns.openManifest(theirsSealed);
+    const theirs = ns.openManifest(theirsSealed) as ManifestJson;
 
     if (sameContent(ours, theirs)) {
       this.pointer = incoming;
@@ -599,7 +615,7 @@ export default class OpenSyncPlugin extends Plugin {
       this.settings.deviceLabel,
       date,
       BigInt(Math.floor(Date.now() / 1000)),
-    );
+    ) as MergeOutcome;
 
     await this.applyRemote(ns, relay, result.merged, local, mine);
     if (result.conflicts.length > 0) {
@@ -612,14 +628,14 @@ export default class OpenSyncPlugin extends Plugin {
     const merged = await this.readVault();
     ns.clear();
     for (const [path, bytes] of merged) ns.stage(path, bytes);
-    const republish: Commit = ns.commit(
+    const republish = ns.commit(
       BigInt(incoming.generation + 1),
       BigInt(Math.floor(Date.now() / 1000)),
       this.settings.deviceLabel,
       this.scope,
-    );
+    ) as Commit;
     await this.publish(relay, republish);
-    this.base = ns.openManifest(republish.blobs.find((b) => b.id === republish.root)!.bytes);
+    this.base = ns.openManifest(republish.blobs.find((b) => b.id === republish.root)!.bytes) as ManifestJson;
   }
 
   /** Write blobs first, then the pointer. The pointer is the commit. */

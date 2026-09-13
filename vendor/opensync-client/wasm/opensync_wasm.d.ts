@@ -1,5 +1,3 @@
-/* tslint:disable */
-/* eslint-disable */
 
 /**
  * The clipboard payload: an append-only log with a TTL.

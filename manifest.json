@@ -1,7 +1,7 @@
 {
   "id": "opensync",
   "name": "OpenSync",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.6.6",
   "description": "Sync your vault across devices, end-to-end encrypted. Notes sync free and unlimited; attachments are the paid tier, or free on a relay you run yourself.",
   "author": "OpenSync",

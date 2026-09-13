@@ -34,7 +34,8 @@ const STAMP = join(VENDOR, "VENDORED.json");
 // What the plugin actually reaches for. `ui/` is the web apps' shared
 // components and `opensync_wasm_bg.wasm` is the loose binary the glue falls
 // back to — neither is reachable from this plugin, and the bytes are already
-// in `inline.ts` as base64.
+// in `inline.ts` as base64. `opensync_wasm_bg.wasm.d.ts` describes that binary's
+// raw exports and nothing imports it, so it is left behind too.
 const FILES = [
   "index.ts",
   "hosted.ts",
@@ -46,10 +47,27 @@ const FILES = [
   "wasm/inline.ts",
   "wasm/opensync_wasm.js",
   "wasm/opensync_wasm.d.ts",
-  "wasm/opensync_wasm_bg.wasm.d.ts",
 ];
 
-const sha = (path) => createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
+/**
+ * What a vendored file should contain, given the engine's copy of it.
+ *
+ * wasm-bindgen opens every file it generates with a blanket
+ * `/* eslint-disable *\/` (and a `tslint` twin). The community directory's
+ * scan treats an unlimited disable as an error — rightly, since it would
+ * silence its security rules over the whole file — and failed 0.1.1 on it.
+ * The comment is boilerplate, not a considered exemption: removing it changes
+ * no behaviour and lets the file be read by the same rules as everything else.
+ *
+ * The check applies this too, so a stripped copy still matches its source.
+ */
+function vendored(path) {
+  const text = readFileSync(path, "utf8");
+  if (!/\.(d\.ts|js)$/.test(path)) return text;
+  return text.replace(/^\/\* (?:tslint:|eslint-)disable \*\/\r?\n/gm, "");
+}
+
+const sha = (text) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 const check = process.argv.includes("--check");
 
 if (!existsSync(SOURCE)) {
@@ -69,7 +87,7 @@ if (check) {
       drifted.push(`${f} — missing from the copy`);
       continue;
     }
-    if (sha(from) !== sha(mine)) drifted.push(`${f} — differs from the engine`);
+    if (sha(vendored(from)) !== sha(readFileSync(mine, "utf8"))) drifted.push(`${f} — differs from the engine`);
   }
   const extra = Object.keys(stamp.files ?? {}).filter((f) => !FILES.includes(f));
   for (const f of extra) drifted.push(`${f} — vendored but no longer wanted`);
@@ -95,9 +113,10 @@ for (const f of FILES) {
     console.error(`the engine has no ${f} — has the client been rearranged?`);
     process.exit(1);
   }
-  cpSync(from, join(VENDOR, f));
-  files[f] = sha(from);
-  bytes += statSync(from).size;
+  const text = vendored(from);
+  writeFileSync(join(VENDOR, f), text);
+  files[f] = sha(text);
+  bytes += Buffer.byteLength(text);
 }
 
 writeFileSync(
