@@ -1,9 +1,12 @@
 import {
+  accountLink,
   GrantSession,
   Invitation,
   JoinSession,
   PairingCode,
   pairingStep,
+  qrRowsFor,
+  readAccountLink,
   readRecoveryKit,
   renderRecoveryKit,
 } from "./wasm/opensync_wasm.js";
@@ -46,7 +49,27 @@ export interface Enrollment {
   accountId: string;
 }
 
-export { Invitation, PairingCode, renderRecoveryKit, readRecoveryKit };
+export {
+  Invitation,
+  PairingCode,
+  renderRecoveryKit,
+  readRecoveryKit,
+  accountLink,
+  readAccountLink,
+  qrRowsFor,
+};
+
+/**
+ * What `readAccountLink` gives back.
+ *
+ * The same two keys the printed page carries, plus the relay it named — which
+ * the page deliberately omits, because paper outlives a hostname and a link
+ * pasted into a fresh device is the one moment there is nowhere else to get it
+ * from.
+ */
+export interface AccountLinkContents extends RecoveryKitContents {
+  relayWs: string;
+}
 
 /** What `readRecoveryKit` gives back: the two keys, and the account they name. */
 export interface RecoveryKitContents {

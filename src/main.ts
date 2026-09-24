@@ -7,6 +7,7 @@ import {
   Setting,
   TFile,
   normalizePath,
+  requestUrl,
 } from "obsidian";
 
 import {
@@ -17,14 +18,22 @@ import {
   Invitation,
   joinAccount,
   Namespace,
+  npubOf,
   PairingCode,
   parseAccountKey,
   QuotaError,
+  readAccountLink,
   readRecoveryKit,
   ready,
   Relay,
+  RemoteSigner,
   renderRecoveryKit,
+  republishVaultKey,
+  signInWithNostr,
   Signer,
+  vaultString,
+  type NostrSigner,
+  type SignerChoice,
 // Vendored, not reached across a sibling checkout: this repository has to
 // build on its own, for a reviewer and for the directory's build check.
 // `npm run vendor` refreshes it; `npm run vendor:check` fails if it drifts.
@@ -107,6 +116,30 @@ declare const __HOSTED_RELAY__: string;
 declare const __TEST_BUILD__: boolean;
 const HOSTED_RELAY = __HOSTED_RELAY__;
 
+/**
+ * The OpenApps account server: the account a Nostr sign-in also signs in to.
+ *
+ * The product's own host, never the platform's. Being provisioned as this is
+ * written, which is why nothing about syncing waits on it: a sign-in that
+ * cannot reach it still sets sync up, and says so.
+ */
+const ACCOUNTS_BASE = "https://auth.opensync.network";
+/**
+ * Is this a build for the in-app checks?
+ *
+ * Only then may the account server be pointed elsewhere, at a local one the
+ * check starts. A released build has no way to be redirected: the address a
+ * signed challenge names is the address it is sent to.
+ */
+declare const __CHECK_BUILD__: boolean;
+function accountsBase(): string {
+  if (__CHECK_BUILD__) {
+    const override = (globalThis as { opensyncAccountsBase?: string }).opensyncAccountsBase;
+    if (override) return override.replace(/\/+$/, "");
+  }
+  return ACCOUNTS_BASE;
+}
+
 /** The blob endpoint beside a relay: same host, the other scheme. */
 function storageFor(ws: string): string {
   if (!ws) return "";
@@ -149,6 +182,37 @@ interface OpenSyncSettings {
    */
   hostedRelay: string;
   intervalSeconds: number;
+  /**
+   * How this device signs, once it has signed in with Nostr. Absent on an
+   * install set up with keys of its own, which signs with `accountSecret` as
+   * it always has. For a remote signer `accountSecret` is empty — the key is
+   * in the signer, not here.
+   */
+  nostr?: SignerChoice;
+  /** The OpenApps account the same key signed in to, as last seen. */
+  account?: { id: string; name: string } | null;
+  /** This install's entry in Obsidian's secret storage, when there is one. */
+  secretId?: string;
+}
+
+/** An OpenApps session. Kept with the secrets, never in `data.json` if avoidable. */
+interface AccountSession {
+  access_token: string;
+  refresh_token: string;
+}
+
+/**
+ * What goes in Obsidian's secret storage rather than `data.json`.
+ *
+ * Only for a Nostr sign-in: that key is somebody's identity everywhere Nostr
+ * is used, not a key this plugin made up, and a vault folder is a thing
+ * people copy, back up and share. Installs set up with their own random keys
+ * keep them where they always were.
+ */
+interface StoredSecrets {
+  accountSecret?: string;
+  clientSecret?: string;
+  session?: AccountSession | null;
 }
 
 // Loopback is a fine default on a desktop, where the relay is often on the
@@ -188,6 +252,8 @@ const DEFAULTS: OpenSyncSettings = {
 type StoredState = Partial<OpenSyncSettings> & {
   _pointer?: Pointer | null;
   _base?: ManifestJson | null;
+  /** The OpenApps session, when there is no secret storage to keep it in. */
+  _session?: AccountSession | null;
 };
 
 /** What the engine's merge hands back. */
@@ -256,8 +322,15 @@ export default class OpenSyncPlugin extends Plugin {
   private pointer: Pointer | null = null;
   private base: ManifestJson | null = null;
   private status: HTMLElement | null = null;
+  /** What the status bar says, without the prefix, for the settings pane. */
+  statusText = "idle";
   private running = false;
   private dirty = false;
+  /** The signer the relay uses, and which identity it was opened for. */
+  private signer: NostrSigner | null = null;
+  private signerFor = "";
+  /** The OpenApps session, if the Nostr sign-in reached the account server. */
+  session: AccountSession | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -300,11 +373,47 @@ export default class OpenSyncPlugin extends Plugin {
 
   onunload(): void {
     this.relay?.close();
+    void this.signer?.close?.();
+  }
+
+  /**
+   * Obsidian's secret storage, where it exists (1.11.4 and later).
+   *
+   * Looked up rather than assumed: the plugin still loads on 1.6.6, where
+   * there is none and a Nostr key has to live in `data.json` like every other
+   * key here.
+   */
+  private get keychain(): { setSecret(id: string, secret: string): void; getSecret(id: string): string | null } | null {
+    const store = (this.app as { secretStorage?: unknown }).secretStorage as
+      | { setSecret?: unknown; getSecret?: unknown }
+      | undefined;
+    if (!store || typeof store.setSecret !== "function" || typeof store.getSecret !== "function") return null;
+    return store as { setSecret(id: string, secret: string): void; getSecret(id: string): string | null };
+  }
+
+  /** Whether a Nostr key is kept out of `data.json` on this install. */
+  get secretsInKeychain(): boolean {
+    return this.keychain !== null;
   }
 
   async loadSettings(): Promise<void> {
     const stored = ((await this.loadData()) ?? {}) as StoredState;
     this.settings = Object.assign({}, DEFAULTS, stored);
+    this.session = stored._session ?? null;
+    const keychain = this.keychain;
+    if (this.settings.secretId && keychain) {
+      try {
+        const secrets = JSON.parse(keychain.getSecret(this.settings.secretId) || "{}") as StoredSecrets;
+        if (secrets.accountSecret) this.settings.accountSecret = secrets.accountSecret;
+        if (secrets.clientSecret && this.settings.nostr?.kind === "bunker") {
+          this.settings.nostr = { ...this.settings.nostr, clientSecret: secrets.clientSecret };
+        }
+        if (secrets.session) this.session = secrets.session;
+      } catch {
+        // An unreadable entry reads as "not signed in on this device", which
+        // the pane says, and signing in again repairs.
+      }
+    }
     // The label ends up in the name of every conflict copy, so a default that
     // is the same everywhere makes the copies useless: two devices both
     // shipped "This device" and produced "note (conflict … from This
@@ -320,26 +429,81 @@ export default class OpenSyncPlugin extends Plugin {
     this.ns = null;
     this.relay?.close();
     this.relay = null;
+    // The signer outlives an ordinary settings change: for a remote signer,
+    // reopening it is a round trip to a phone. Only a different identity
+    // closes it.
+    if (this.signer && this.signerFor !== this.identity()) {
+      void this.signer.close?.();
+      this.signer = null;
+    }
   }
 
   private setStatus(text: string): void {
+    this.statusText = text;
     this.status?.setText(`OpenSync: ${text}`);
   }
 
-  private ready(): { ns: Namespace; relay: Relay } | null {
-    if (!this.settings.namespaceKey || !this.settings.accountSecret) return null;
+  /** Has this device been set up — with keys of its own, or a Nostr sign-in? */
+  get configured(): boolean {
+    const s = this.settings;
+    return Boolean(s.namespaceKey && (s.accountSecret || s.nostr?.kind === "bunker"));
+  }
+
+  /** Which identity the saved settings sign as, for noticing a change. */
+  private identity(): string {
+    const s = this.settings;
+    return `${s.nostr?.kind ?? "own"}|${s.nostr?.pubkey ?? ""}|${s.accountSecret}`;
+  }
+
+  /** The npub this device syncs as, if it can say without asking a signer. */
+  get npub(): string | null {
     try {
-      if (!this.ns) this.ns = new Namespace(this.settings.namespaceKey);
-      if (!this.relay) {
-        this.relay = new Relay(
-          this.settings.relayWs,
-          this.settings.relayHttp.replace(/\/$/, ""),
-          // The settings field holds `nsec1…` — that is what the Generate
+      if (this.settings.nostr?.pubkey) return npubOf(this.settings.nostr.pubkey);
+      if (!this.settings.accountSecret) return null;
+      return npubOf(Signer.fromHex(parseAccountKey(this.settings.accountSecret)).pubkey);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The signer for this device's account, opened once and kept.
+   *
+   * A key held here is instant. A remote signer is a connection to an app on
+   * a phone, reopened with the client key it was approved for, so a restart
+   * does not ask for approval again.
+   */
+  async openSigner(): Promise<NostrSigner> {
+    const identity = this.identity();
+    if (this.signer && this.signerFor === identity) return this.signer;
+    await this.signer?.close?.();
+    this.signer = null;
+    const choice = this.settings.nostr;
+    const signer =
+      choice?.kind === "bunker"
+        ? await RemoteSigner.open(choice.bunker, {
+            clientSecret: choice.clientSecret,
+            expected: choice.pubkey,
+            onAuthUrl: (url) => new Notice(`OpenSync: your remote signer asks you to approve this device — ${url}`, 0),
+          })
+        : // The settings field holds `nsec1…` — that is what the Generate
           // button writes and what the description asks for — so it is
           // decoded here. Handing the bech32 string straight to `fromHex`
           // throws on the very first sync, which is what this used to do.
-          Signer.fromHex(parseAccountKey(this.settings.accountSecret)),
-        );
+          Signer.fromHex(parseAccountKey(this.settings.accountSecret));
+    this.signer = signer;
+    this.signerFor = identity;
+    return signer;
+  }
+
+  private async connect(): Promise<{ ns: Namespace; relay: Relay } | null> {
+    if (!this.configured) return null;
+    try {
+      await ready();
+      if (!this.ns) this.ns = new Namespace(this.settings.namespaceKey);
+      if (!this.relay) {
+        const signer = await this.openSigner();
+        this.relay = new Relay(this.settings.relayWs, this.settings.relayHttp.replace(/\/$/, ""), signer);
       }
     } catch (e) {
       this.setStatus(`keys are not usable — ${message(e)}`);
@@ -457,8 +621,8 @@ export default class OpenSyncPlugin extends Plugin {
    * again, ten characters each.
    */
   async rotate(onProgress: (line: string) => void): Promise<string> {
-    const ctx = this.ready();
-    if (!ctx) throw new Error("set a relay, an account key and a vault key first");
+    const ctx = await this.connect();
+    if (!ctx) throw new Error("sign in first");
     if (this.running) throw new Error("a sync is running — wait for it to finish");
 
     // Collect what the old key addressed *before* anything changes, so it can
@@ -484,7 +648,7 @@ export default class OpenSyncPlugin extends Plugin {
       this.ns = null;
       await this.saveState();
 
-      const fresh = this.ready();
+      const fresh = await this.connect();
       if (!fresh) throw new Error("the new key was refused");
 
       // Publish without reading, which no other path here does. An ordinary
@@ -519,6 +683,26 @@ export default class OpenSyncPlugin extends Plugin {
           ? `Swept all ${swept}.`
           : `Swept ${swept} of ${stranded.size} — the rest stay on the relay as ciphertext nothing can read.`,
       );
+
+      // An account that signs in with Nostr keeps its vault key on the relay,
+      // sealed to the npub. Left alone, the next device to sign in would be
+      // handed the key just rotated away and sync into a vault nobody else
+      // can read.
+      if (this.settings.nostr) {
+        try {
+          await republishVaultKey(
+            await this.openSigner(),
+            { ws: this.settings.relayWs, http: this.settings.relayHttp },
+            key,
+          );
+          onProgress("Sealed the new key to your Nostr account, so a device that signs in gets it.");
+        } catch (e) {
+          onProgress(
+            `The new key could not be sealed to your Nostr account (${message(e)}). ` +
+              "A device signing in now would get the old one — press Rotate again once the relay is reachable.",
+          );
+        }
+      }
       return key;
     } finally {
       this.running = false;
@@ -527,9 +711,13 @@ export default class OpenSyncPlugin extends Plugin {
 
   async sync(interactive: boolean): Promise<void> {
     if (this.running) return;
-    const ctx = this.ready();
+    if (!this.configured) {
+      if (interactive) new Notice("OpenSync: sign in first, under Settings → OpenSync.");
+      return;
+    }
+    const ctx = await this.connect();
     if (!ctx) {
-      if (interactive) new Notice("OpenSync: set a relay, an account key and a vault key first.");
+      if (interactive) new Notice(`OpenSync: ${this.statusText}`);
       return;
     }
     this.running = true;
@@ -664,11 +852,193 @@ export default class OpenSyncPlugin extends Plugin {
    * manufacture conflict copies out of an ordinary update.
    */
   private async saveState(): Promise<void> {
-    await this.saveData({
+    const state: StoredState = {
       ...this.settings,
       _pointer: this.pointer,
       _base: this.base,
-    });
+      _session: this.session,
+    };
+    const keychain = this.keychain;
+    if (keychain && this.settings.nostr) {
+      // A Nostr sign-in's secrets go to Obsidian's secret storage, and
+      // `data.json` keeps only which entry holds them.
+      if (!this.settings.secretId) this.settings.secretId = `opensync-${randomId()}`;
+      const secrets: StoredSecrets = {
+        accountSecret: this.settings.accountSecret || undefined,
+        clientSecret: this.settings.nostr.kind === "bunker" ? this.settings.nostr.clientSecret : undefined,
+        session: this.session,
+      };
+      keychain.setSecret(this.settings.secretId, JSON.stringify(secrets));
+      state.secretId = this.settings.secretId;
+      state.accountSecret = "";
+      state._session = null;
+      if (state.nostr?.kind === "bunker") state.nostr = { ...state.nostr, clientSecret: "" };
+    } else if (keychain && this.settings.secretId) {
+      // Signed out, or back to keys of its own: nothing is left in there.
+      keychain.setSecret(this.settings.secretId, "");
+    }
+    await this.saveData(state);
+  }
+
+  /**
+   * Sign this device in with a Nostr key.
+   *
+   * Finds the vault key sealed to that key on the relay and joins it; with
+   * none, creates one — or, on a device that already synced with keys of its
+   * own, keeps that vault key and seals it to the Nostr account. Either way
+   * the files in this vault are merged into what the account holds on the
+   * next sync, so nothing here is lost by signing in.
+   *
+   * Saves nothing until the relay has answered, so a failure leaves this
+   * device exactly as it was. The account server is tried last and never
+   * fails the sign-in.
+   */
+  async signInNostr(
+    open: () => Promise<NostrSigner>,
+    nsec: string,
+    onProgress: (line: string) => void,
+  ): Promise<string> {
+    if (this.running) throw new Error("a sync is running — wait for it to finish");
+    const s = this.settings;
+    if (!s.relayWs) throw new Error("Fill in the relay address under Relay and keys first.");
+    await ready();
+    this.running = true;
+    let signer: NostrSigner | null = null;
+    let kept = false;
+    try {
+      signer = await open();
+      onProgress(`Looking for your vault on ${s.relayWs}…`);
+      const before = this.configured ? { pubkey: this.npub, key: s.namespaceKey } : null;
+      const endpoint = { ws: s.relayWs, http: s.relayHttp || storageFor(s.relayWs) };
+      const result = await signInWithNostr(signer, endpoint, before?.key ?? null);
+      const samePlace =
+        before !== null && before.pubkey === result.npub && vaultString(before.key) === result.namespaceKey;
+
+      const choice: SignerChoice =
+        signer instanceof RemoteSigner ? signer.choice : { kind: "key", pubkey: signer.pubkey };
+      this.relay?.close();
+      this.relay = null;
+      this.ns = null;
+      if (this.signer !== signer) await this.signer?.close?.();
+      s.nostr = choice;
+      s.accountSecret = choice.kind === "key" ? nsec.trim() : "";
+      s.namespaceKey = result.namespaceKey;
+      s.relayHttp = endpoint.http;
+      if (!samePlace) {
+        // A different identity or a different vault key is a different
+        // history. What this vault holds is merged into the account's on the
+        // next sync rather than published over it.
+        this.pointer = null;
+        this.base = null;
+      }
+      this.signer = signer;
+      this.signerFor = this.identity();
+      kept = true;
+      this.session = null;
+      s.account = null;
+      await this.saveState();
+
+      const what = {
+        joined: "Signed in. This device joined your vault.",
+        created: "Signed in, and a vault made for your account. Sign in on your other devices to bring them in.",
+        adopted: "Signed in, carrying on with the vault this device already had.",
+      }[result.setup];
+      onProgress(before && !samePlace ? `${what} What this vault held is merged in on the next sync.` : what);
+
+      onProgress("Signing in to your OpenApps account…");
+      onProgress(await this.connectAccount());
+      // After `running` is cleared below, or the sync would see it and leave.
+      window.setTimeout(() => void this.sync(false), 0);
+      return what;
+    } finally {
+      this.running = false;
+      if (!kept) await signer?.close?.();
+    }
+  }
+
+  /**
+   * Sign in to the OpenApps account with the key this device syncs as.
+   *
+   * Never throws: the account is a convenience on top of sync, and the server
+   * is new. Returns the line the pane shows.
+   */
+  async connectAccount(): Promise<string> {
+    if (!this.settings.nostr) return "";
+    try {
+      const signer = await this.openSigner();
+      this.session = await accountSignIn(signer);
+      const me = await accountMe(this.session);
+      this.settings.account = me;
+      await this.saveState();
+      return `Signed in to your OpenApps account, ${me.name}.`;
+    } catch (e) {
+      this.session = null;
+      this.settings.account = null;
+      await this.saveState();
+      return `Your OpenApps account could not be reached (${message(e)}). Sync works without it.`;
+    }
+  }
+
+  /**
+   * Ask the account server who this is, refreshing the session if it has
+   * expired. `null` when there is no session; throws when unreachable.
+   */
+  async refreshAccount(): Promise<{ id: string; name: string } | null> {
+    if (!this.session) return null;
+    let me: { id: string; name: string };
+    try {
+      me = await accountMe(this.session);
+    } catch (e) {
+      if (!(e instanceof AccountError && e.status === 401)) throw e;
+      try {
+        this.session = await accountCall<AccountSession>("/v1/auth/refresh", {
+          refresh_token: this.session.refresh_token,
+        });
+      } catch (again) {
+        if (again instanceof AccountError && again.status === 401) {
+          this.session = null;
+          this.settings.account = null;
+          await this.saveState();
+          return null;
+        }
+        throw again;
+      }
+      me = await accountMe(this.session);
+    }
+    this.settings.account = me;
+    await this.saveState();
+    return me;
+  }
+
+  /**
+   * Forget this device's account: keys, signer, account session. The files
+   * in the vault stay; so does everything on the relay.
+   */
+  async signOut(): Promise<void> {
+    if (this.running) throw new Error("a sync is running — wait for it to finish");
+    const session = this.session;
+    if (session) {
+      // Best effort: signing out here happens whether or not it arrives.
+      void accountCall("/v1/auth/logout", { refresh_token: session.refresh_token }, session.access_token).catch(
+        () => undefined,
+      );
+    }
+    this.relay?.close();
+    this.relay = null;
+    this.ns = null;
+    await this.signer?.close?.();
+    this.signer = null;
+    this.signerFor = "";
+    const s = this.settings;
+    s.accountSecret = "";
+    s.namespaceKey = "";
+    s.nostr = undefined;
+    s.account = null;
+    this.session = null;
+    this.pointer = null;
+    this.base = null;
+    await this.saveState();
+    this.setStatus("signed out");
   }
 
   /**
@@ -749,6 +1119,110 @@ function concat(parts: Uint8Array[]): Uint8Array {
 
 function equal(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/* ------------------------------------------------------ the OpenApps account */
+
+/** A refusal from the account server, with the status that decides a retry. */
+class AccountError extends Error {
+  constructor(
+    detail: string,
+    readonly status: number,
+  ) {
+    super(detail);
+    this.name = "AccountError";
+  }
+}
+
+/**
+ * One call to the account server, through Obsidian's `requestUrl`.
+ *
+ * Not `fetch`: the plugin's origin is `app://obsidian.md`, which the server
+ * has no reason to allow, and `requestUrl` is not subject to CORS.
+ */
+async function accountCall<T>(path: string, body?: unknown, bearer?: string): Promise<T> {
+  let res: { status: number; text: string };
+  try {
+    res = await requestUrl({
+      url: `${accountsBase()}${path}`,
+      method: body === undefined ? "GET" : "POST",
+      contentType: "application/json",
+      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+      throw: false,
+    });
+  } catch (e) {
+    throw new AccountError(`account server unreachable: ${message(e)}`, 0);
+  }
+  let value: unknown = null;
+  try {
+    value = res.text ? JSON.parse(res.text) : null;
+  } catch {
+    throw new AccountError(`the account server answered ${res.status} with something unreadable`, res.status);
+  }
+  if (res.status >= 200 && res.status < 300) return value as T;
+  const error = (value as { error?: { message?: string } } | null)?.error;
+  throw new AccountError(error?.message ?? `the account server answered ${res.status}`, res.status);
+}
+
+/**
+ * Sign in with the key this device syncs as: the server hands out an event
+ * template naming its verify URL and a nonce, the signer signs it, and the
+ * signed event comes back. The key never leaves the signer.
+ */
+async function accountSignIn(signer: NostrSigner): Promise<AccountSession> {
+  const challenge = await accountCall<{ challenge_id?: string; id?: string; message?: string; payload?: string }>(
+    "/v1/auth/challenge",
+    { namespace: "nostr" },
+  );
+  const id = challenge.challenge_id ?? challenge.id;
+  const template = challenge.message ?? challenge.payload;
+  if (!id || !template) throw new AccountError("the account server sent a challenge without a template", 0);
+  const t = JSON.parse(template) as { kind: number; tags: string[][]; content?: string; created_at?: number };
+  const event = await signer.signEvent({
+    kind: t.kind,
+    tags: t.tags,
+    content: t.content ?? "",
+    created_at: t.created_at ?? Math.floor(Date.now() / 1000),
+  });
+  const session = await accountCall<AccountSession>("/v1/auth/verify", {
+    challenge_id: id,
+    proof: { type: "nostr_event", event: JSON.stringify(event) },
+  });
+  if (!session?.access_token) throw new AccountError("the account server signed nobody in", 0);
+  return session;
+}
+
+async function accountMe(session: AccountSession): Promise<{ id: string; name: string }> {
+  const me = await accountCall<{ id: string; display_name?: string | null }>("/v1/me", undefined, session.access_token);
+  return { id: me.id, name: me.display_name || me.id };
+}
+
+/* ------------------------------------------------------------------ misc */
+
+/** Eight random bytes as hex: a name for this install's secret-storage entry. */
+function randomId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** A pasted secret key, as opposed to a remote signer's address. */
+function isSecretKey(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith("nsec1") || /^[0-9a-f]{64}$/i.test(t);
+}
+
+/** An npub short enough for a line, whole enough to recognise. */
+function shortNpub(npub: string): string {
+  return npub.length > 24 ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : npub;
+}
+
+/**
+ * Whether a blob of text is a recovery kit rather than a code or a link.
+ * Both key prefixes, so a stray `nsec1` in something else is not routed here.
+ */
+function looksLikeKit(text: string): boolean {
+  const flat = text.toLowerCase();
+  return flat.includes("nsec1") && flat.includes("ovault1");
 }
 
 /** Whatever was thrown, as something worth showing a user. */

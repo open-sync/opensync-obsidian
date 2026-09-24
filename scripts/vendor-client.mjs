@@ -44,6 +44,13 @@ const FILES = [
   "pairing.ts",
   "qr.ts",
   "scan.ts",
+  // Signing in with Nostr: the sealed vault-key record, the three kinds of
+  // signer, and NIP-44 for sealing. `vault.ts` comes along because `index.ts`
+  // re-exports it; the plugin still runs its own sync loop.
+  "account.ts",
+  "signer.ts",
+  "nip44.ts",
+  "vault.ts",
   "wasm/inline.ts",
   "wasm/opensync_wasm.js",
   "wasm/opensync_wasm.d.ts",

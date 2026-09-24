@@ -44,7 +44,7 @@ export class Clipboard {
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             let v3;
             if (r0 !== 0) {
-                v3 = getStringFromWasm0(r0, r1).slice();
+                v3 = getStringFromWasm0(r0, r1);
                 wasm.__wbindgen_export4(r0, r1 * 1, 1);
             }
             return v3;
@@ -735,7 +735,7 @@ export class Namespace {
             if (r3) {
                 throw takeObject(r2);
             }
-            var v2 = getArrayJsValueFromWasm0(r0, r1).slice();
+            var v2 = getArrayJsValueFromWasm0(r0, r1);
             wasm.__wbindgen_export4(r0, r1 * 4, 4);
             return v2;
         } finally {
@@ -1416,6 +1416,51 @@ export class Secrets {
 if (Symbol.dispose) Secrets.prototype[Symbol.dispose] = Secrets.prototype.free;
 
 /**
+ * The same account as one pasteable line, and the reader for one.
+ *
+ * The printed page is right for a drawer and wrong for a phone: two blocks of
+ * sixty characters is not something anybody types twice, and not every device
+ * has a camera to be shown a QR instead. This is the third way in.
+ * @param {string} account_secret
+ * @param {string} namespace_key
+ * @param {string} namespace
+ * @param {string} relay_ws
+ * @returns {string}
+ */
+export function accountLink(account_secret, namespace_key, namespace, relay_ws) {
+    let deferred6_0;
+    let deferred6_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(account_secret, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(namespace_key, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(namespace, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(relay_ws, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len3 = WASM_VECTOR_LEN;
+        wasm.accountLink(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr5 = r0;
+        var len5 = r1;
+        if (r3) {
+            ptr5 = 0; len5 = 0;
+            throw takeObject(r2);
+        }
+        deferred6_0 = ptr5;
+        deferred6_1 = len5;
+        return getStringFromWasm0(ptr5, len5);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred6_0, deferred6_1, 1);
+    }
+}
+
+/**
  * The RP ID this page may act for, or a throw explaining why not.
  *
  * The service worker asks this *before* showing anyone a prompt, so a page
@@ -1451,6 +1496,42 @@ export function effectiveRpId(page_url, requested) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * The account's public identity as `npub1…`, from its 32-byte x-only public
+ * key in hex (what the relay sees as the event author).
+ *
+ * The same bech32 implementation as every other key in the product, so an
+ * npub shown by the browser app reads identically on the desktop and phone.
+ * @param {string} pubkey_hex
+ * @returns {string}
+ */
+export function encodeNpub(pubkey_hex) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(pubkey_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.encodeNpub(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr2 = r0;
+        var len2 = r1;
+        if (r3) {
+            ptr2 = 0; len2 = 0;
+            throw takeObject(r2);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
     }
 }
 
@@ -1526,7 +1607,7 @@ export function pageOrigin(page_url) {
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         let v2;
         if (r0 !== 0) {
-            v2 = getStringFromWasm0(r0, r1).slice();
+            v2 = getStringFromWasm0(r0, r1);
             wasm.__wbindgen_export4(r0, r1 * 1, 1);
         }
         return v2;
@@ -1633,6 +1714,56 @@ export function parseVaultKey(input) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * A QR of any string, as a flat grid the caller draws.
+ *
+ * The invitation has carried its own for a while; an account link needs the
+ * same job done and is not an invitation. Rows as one array with the side
+ * length returned separately would let a caller get the stride wrong, so this
+ * hands back an array of rows.
+ * @param {string} text
+ * @returns {any}
+ */
+export function qrRowsFor(text) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.qrRowsFor(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        if (r2) {
+            throw takeObject(r1);
+        }
+        return takeObject(r0);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * @param {string} input
+ * @returns {any}
+ */
+export function readAccountLink(input) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(input, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.readAccountLink(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        if (r2) {
+            throw takeObject(r1);
+        }
+        return takeObject(r0);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
     }
 }
 
@@ -2299,11 +2430,15 @@ function __wbg_finalize_init(instance, module) {
 
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
         if (typeof WebAssembly.instantiateStreaming === 'function') {
             try {
                 return await WebAssembly.instantiateStreaming(module, imports);
             } catch (e) {
-                const validResponse = module.ok && expectedResponseType(module.type);
+                const validResponse = expectedResponseType(module.type);
 
                 if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
                     console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);

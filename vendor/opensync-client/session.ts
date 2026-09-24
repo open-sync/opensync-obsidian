@@ -11,8 +11,7 @@ import init, {
   rpIdVerdict,
   Secrets,
 } from "./wasm/opensync_wasm.js";
-import { WASM_BASE64 } from "./wasm/inline";
-import { QuotaError, Relay, Signer } from "./relay";
+import { QuotaError, Relay, Signer, type NostrSigner } from "./relay";
 
 export {
   QuotaError,
@@ -33,15 +32,89 @@ export {
 
 let started: Promise<void> | null = null;
 
-/** Instantiate the wasm module once per page, from bytes we already have. */
-export function ready(): Promise<void> {
-  if (!started) started = init({ module_or_path: base64ToBytes(WASM_BASE64) }).then(() => undefined);
+/**
+ * Where the compiled core comes from: a URL to fetch (a bundler's `.wasm`
+ * asset), bytes, a `Response`, or an already compiled module.
+ */
+export type WasmSource = string | URL | Request | Response | BufferSource | WebAssembly.Module;
+
+/**
+ * Instantiate the wasm module once per page.
+ *
+ * With no argument it comes from the base64 copy inlined beside the glue,
+ * which is what a single-file bundle (the Obsidian plugin, an extension's
+ * service worker, the Node checks) needs: nothing to fetch, the same path on
+ * desktop and mobile. That copy is 1.65 MB of JavaScript, so it is loaded by a
+ * dynamic import — esbuild without splitting folds it back into the bundle,
+ * and a bundler that serves `.wasm` as an asset never has to ship it.
+ *
+ * A web app passes the asset's URL instead, which compiles while it streams.
+ * Whichever call comes first wins; later calls share its promise, so library
+ * code can keep calling `ready()` with no argument after the host chose.
+ * A failed start is not cached, so the next call tries again.
+ *
+ * **In a service worker, the host must call `ready(url)` first unless its
+ * bundler inlines the dynamic import.** `import()` is disallowed inside a
+ * `ServiceWorkerGlobalScope` by the HTML spec whatever the manifest says —
+ * `"type": "module"` enables *static* import only. esbuild with `bundle: true`
+ * and no splitting folds this one back into the bundle, so OpenPassword's
+ * worker never reaches it; a bundler that preserves it, as Vite does, rejects
+ * here. The catch below is what makes that say so, because otherwise Vite's
+ * own preload helper handles the rejection by calling `window.dispatchEvent`
+ * and the reported error is `window is not defined`, four frames from
+ * anything to do with wasm.
+ */
+/** The inlined copy, or an error that names why there is not one here. */
+async function inlineWasm(): Promise<string> {
+  try {
+    return (await import("./wasm/inline")).WASM_BASE64;
+  } catch (cause) {
+    // Read off globalThis rather than naming the type: a web app's tsconfig
+    // has no service-worker lib, and this file is compiled by both.
+    const scope = (globalThis as { ServiceWorkerGlobalScope?: new () => unknown })
+      .ServiceWorkerGlobalScope;
+    const worker = !!scope && globalThis instanceof scope;
+    const error = new Error(
+      worker
+        ? "ready() with no argument needs a dynamic import, which a service worker " +
+          "may not do. Either call ready(url) with the .wasm asset's URL, or bundle " +
+          "this worker with esbuild, which folds the import back in."
+        : "could not load the inlined wasm; call ready(url) with the .wasm asset's URL",
+    );
+    // Assigned rather than passed: `new Error(msg, { cause })` is ES2022, and
+    // the extension compiles against an older lib — so the tidier form breaks
+    // a consumer's typecheck rather than this file's.
+    (error as { cause?: unknown }).cause = cause;
+    throw error;
+  }
+}
+
+export function ready(source?: WasmSource): Promise<void> {
+  if (!started) {
+    started = (async () => {
+      const input = source ?? base64ToBytes(await inlineWasm());
+      if (input instanceof Uint8Array && input.length === 0) {
+        throw new Error("this build does not include the inline wasm; call ready(url) first");
+      }
+      await init({ module_or_path: input });
+    })().catch((e) => {
+      started = null;
+      throw e;
+    });
+  }
   return started;
 }
 
 export interface Keys {
-  /** Identifies the account to the relay. Never sees payload content. */
+  /**
+   * Identifies the account to the relay. Never sees payload content.
+   *
+   * Empty when `signer` is given: an account signed in through an extension
+   * or a remote signer has no secret on this device at all.
+   */
   accountSecret: string;
+  /** Signs for the account instead of `accountSecret`, when present. */
+  signer?: NostrSigner;
   /** Encrypts everything before it leaves the device. */
   namespaceKey: string;
 }
@@ -122,11 +195,7 @@ export class Payload {
     // with a reason rather than producing a vault nobody can read.
     return new Payload(
       new Namespace(keys.namespaceKey),
-      new Relay(
-        endpoint.ws,
-        endpoint.http.replace(/\/$/, ""),
-        Signer.fromHex(parseAccountKey(keys.accountSecret)),
-      ),
+      new Relay(endpoint.ws, endpoint.http.replace(/\/$/, ""), signerOf(keys)),
       namespace,
       files,
     );
@@ -299,6 +368,13 @@ export class Payload {
     for (const id of stranded) if (await this.relay.deleteBlob(id)) swept += 1;
     return { stranded: stranded.size, swept };
   }
+}
+
+/** The signer for a set of keys: the one given, or one made from the secret. */
+export function signerOf(keys: Keys): NostrSigner {
+  if (keys.signer) return keys.signer;
+  if (!keys.accountSecret) throw new Error("this device has no account key and no signer");
+  return Signer.fromHex(parseAccountKey(keys.accountSecret));
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {

@@ -329,6 +329,15 @@ export class Secrets {
 }
 
 /**
+ * The same account as one pasteable line, and the reader for one.
+ *
+ * The printed page is right for a drawer and wrong for a phone: two blocks of
+ * sixty characters is not something anybody types twice, and not every device
+ * has a camera to be shown a QR instead. This is the third way in.
+ */
+export function accountLink(account_secret: string, namespace_key: string, namespace: string, relay_ws: string): string;
+
+/**
  * The RP ID this page may act for, or a throw explaining why not.
  *
  * The service worker asks this *before* showing anyone a prompt, so a page
@@ -336,6 +345,15 @@ export class Secrets {
  * invited to approve it.
  */
 export function effectiveRpId(page_url: string, requested?: string | null): string;
+
+/**
+ * The account's public identity as `npub1…`, from its 32-byte x-only public
+ * key in hex (what the relay sees as the event author).
+ *
+ * The same bech32 implementation as every other key in the product, so an
+ * npub shown by the browser app reads identically on the desktop and phone.
+ */
+export function encodeNpub(pubkey_hex: string): string;
 
 /**
  * A fresh account key as `nsec1…`.
@@ -373,6 +391,18 @@ export function parseAccountKey(input: string): string;
  */
 export function parseVaultKey(input: string): string;
 
+/**
+ * A QR of any string, as a flat grid the caller draws.
+ *
+ * The invitation has carried its own for a while; an account link needs the
+ * same job done and is not an invitation. Rows as one array with the side
+ * length returned separately would let a caller get the stride wrong, so this
+ * hands back an array of rows.
+ */
+export function qrRowsFor(text: string): any;
+
+export function readAccountLink(input: string): any;
+
 export function readRecoveryKit(text: string): any;
 
 /**
@@ -398,6 +428,7 @@ export interface InitOutput {
     readonly __wbg_pairingcode_free: (a: number, b: number) => void;
     readonly __wbg_passkeys_free: (a: number, b: number) => void;
     readonly __wbg_secrets_free: (a: number, b: number) => void;
+    readonly accountLink: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly clipboard_capture: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => void;
     readonly clipboard_classify: (a: number, b: number, c: number, d: number) => void;
     readonly clipboard_entries: (a: number, b: number) => void;
@@ -408,6 +439,7 @@ export interface InitOutput {
     readonly clipboard_new: () => number;
     readonly clipboard_toCbor: (a: number, b: number) => void;
     readonly effectiveRpId: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly encodeNpub: (a: number, b: number, c: number) => void;
     readonly generateAccountKey: (a: number) => void;
     readonly grantsession_grant: (a: number, b: number, c: number, d: number) => void;
     readonly grantsession_new: (a: number, b: number, c: number) => void;
@@ -457,6 +489,8 @@ export interface InitOutput {
     readonly passkeys_new: () => number;
     readonly passkeys_search: (a: number, b: number, c: number, d: number) => void;
     readonly passkeys_toCbor: (a: number, b: number) => void;
+    readonly qrRowsFor: (a: number, b: number, c: number) => void;
+    readonly readAccountLink: (a: number, b: number, c: number) => void;
     readonly readRecoveryKit: (a: number, b: number, c: number) => void;
     readonly renderRecoveryKit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly rpIdVerdict: (a: number, b: number, c: number, d: number, e: number) => void;

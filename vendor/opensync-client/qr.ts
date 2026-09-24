@@ -12,9 +12,33 @@ import { Invitation } from "./wasm/opensync_wasm.js";
 export function drawInvitation(
   canvas: HTMLCanvasElement,
   invitation: Invitation,
-  options: { moduleSize?: number; dark?: string; light?: string } = {},
+  options: QrOptions = {},
 ): void {
   const size = invitation.qrSize();
+  const rows: boolean[][] = [];
+  for (let y = 0; y < size; y++) rows.push(Array.from(invitation.qrRow(y), (m) => !!m));
+  drawModules(canvas, rows, options);
+}
+
+export interface QrOptions {
+  moduleSize?: number;
+  dark?: string;
+  light?: string;
+}
+
+/**
+ * The same drawing, for a grid that came from somewhere other than an
+ * invitation — an account link, say. Everything the invitation path was
+ * careful about applies unchanged, so it is the one implementation and
+ * `drawInvitation` feeds it.
+ */
+export function drawModules(
+  canvas: HTMLCanvasElement,
+  rows: boolean[][],
+  options: QrOptions = {},
+): void {
+  const size = rows.length;
+  if (!size) throw new Error("nothing to draw");
   // Whole pixels per module, never a fraction. A module boundary that lands
   // mid-pixel is the same grey edge, arrived at a different way.
   const scale = Math.max(1, Math.floor(options.moduleSize ?? 6));
@@ -39,7 +63,7 @@ export function drawInvitation(
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = options.dark ?? "#000000";
   for (let y = 0; y < size; y++) {
-    const row = invitation.qrRow(y);
+    const row = rows[y];
     for (let x = 0; x < size; x++) {
       if (row[x]) ctx.fillRect(x * scale * dpr, y * scale * dpr, scale * dpr, scale * dpr);
     }

@@ -1,48 +1,42 @@
-import { schnorr } from "@noble/curves/secp256k1";
-import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
+import type { NostrEvent, NostrSigner } from "./signer";
+
+export { Signer, Nip07Signer, RemoteSigner, SignerError } from "./signer";
+export type { EventTemplate, NostrEvent, NostrSigner, SignerChoice } from "./signer";
 
 /** Kind 30078: addressable, so the relay keeps exactly one per (pubkey, kind, d). */
 const KIND_POINTER = 30078;
 const KIND_CONNECTION_AUTH = 22242;
 const KIND_BLOSSOM_AUTH = 24242;
 
-export interface NostrEvent {
-  id: string;
-  pubkey: string;
-  created_at: number;
-  kind: number;
-  tags: string[][];
-  content: string;
-  sig: string;
+/** How long a socket exchange waits for its answer. */
+const EXCHANGE_TIMEOUT_MS = 20_000;
+/** How long one HTTP request may take before it is abandoned and retried. */
+const FETCH_TIMEOUT_MS = 20_000;
+/** Retries after the first attempt, for failures a retry can fix. */
+const FETCH_RETRIES = 2;
+/**
+ * How long to wait for the AUTH answer once the relay has challenged.
+ *
+ * Longer than the connect timeout on purpose: with a remote signer the
+ * answer is a request to a phone, which somebody has to unlock and approve.
+ */
+const AUTH_TIMEOUT_MS = 90_000;
+
+export interface RelayOptions {
+  /** Per-request HTTP timeout. Uploads get more in proportion to their size. */
+  fetchTimeoutMs?: number;
+  /** Retries after the first attempt for network failures, timeouts, 429 and 5xx. */
+  retries?: number;
 }
 
-export class Signer {
-  readonly pubkey: string;
-
-  constructor(private readonly secret: Uint8Array) {
-    this.pubkey = bytesToHex(schnorr.getPublicKey(secret));
-  }
-
-  static generate(): Signer {
-    return new Signer(schnorr.utils.randomPrivateKey());
-  }
-
-  static fromHex(hex: string): Signer {
-    return new Signer(hexToBytes(hex));
-  }
-
-  toHex(): string {
-    return bytesToHex(this.secret);
-  }
-
-  sign(kind: number, tags: string[][], content: string, createdAt: number): NostrEvent {
-    const event = { pubkey: this.pubkey, created_at: createdAt, kind, tags, content };
-    // NIP-01's canonical form, byte for byte, or the id will not match.
-    const canonical = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
-    const id = bytesToHex(sha256(utf8ToBytes(canonical)));
-    return { ...event, id, sig: bytesToHex(schnorr.sign(id, this.secret)) };
-  }
+/** One open subscription: who hears its events, and what it asked for. */
+interface Subscription {
+  filter: Record<string, unknown>;
+  onEvent: (event: NostrEvent) => void;
+  /** Standing subscriptions are re-sent after a reconnect; one-shot queries are not. */
+  standing: boolean;
+  onEose?: () => void;
+  onClosed?: (reason: string) => void;
 }
 
 /**
@@ -50,6 +44,15 @@ export class Signer {
  *
  * Pointers go over the socket, bytes go over HTTP. The relay is the
  * rendezvous, never the pipe.
+ *
+ * # One listener, many conversations
+ *
+ * The socket used to be shared by swapping `onmessage` for the length of each
+ * request. That made a standing subscription impossible — the next request
+ * would take the listener away from it — and it is why a device that edited
+ * nothing never heard that anybody else had. Messages now go through one
+ * router: `EVENT`/`EOSE`/`CLOSED` by subscription id, `OK` by event id. A
+ * query, a publish and a live feed can share the connection at once.
  */
 export class Relay {
   private socket: WebSocket | null = null;
@@ -63,12 +66,33 @@ export class Relay {
    * A vault saves more than once a second routinely.
    */
   private watermark = 0;
+  private readonly subscriptions = new Map<string, Subscription>();
+  private readonly awaitingOk = new Map<string, (msg: any[]) => void>();
+  private nextSub = 0;
+  /** Bumped by `close()`, so a socket from before it cannot become current after it. */
+  private epoch = 0;
+  private closed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelay = 1000;
+  /** Aborts every in-flight request when the relay is closed. */
+  private lifetime = new AbortController();
+  private readonly fetchTimeoutMs: number;
+  private readonly retries: number;
 
   constructor(
     private readonly wsUrl: string,
     private readonly httpUrl: string,
-    private readonly signer: Signer,
-  ) {}
+    private readonly signer: NostrSigner,
+    options: RelayOptions = {},
+  ) {
+    this.fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS;
+    this.retries = options.retries ?? FETCH_RETRIES;
+  }
+
+  /** The account's public key on this relay, hex. */
+  get pubkey(): string {
+    return this.signer.pubkey;
+  }
 
   private now(): number {
     return Math.floor(Date.now() / 1000);
@@ -85,12 +109,19 @@ export class Relay {
   private unreachable(): Error {
     const host = this.wsUrl.replace(/^wss?:\/\//, "").split(/[:/]/)[0];
     if (host === "127.0.0.1" || host === "localhost" || host === "::1") {
-      return new Error(
-        `${this.wsUrl} points at this device, not the computer running the relay. ` +
-          "Use that computer's address on your network instead, such as ws://192.168.0.10:4848/",
-      );
+      // Only a problem off the machine the relay runs on. A page on the same
+      // computer reaching its own loopback relay and failing is the relay not
+      // running, and saying "use your network address" would be wrong there.
+      const local =
+        typeof location !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname ?? "");
+      if (!local) {
+        return new RelayUnreachableError(
+          `${this.wsUrl} points at this device, not the computer running the relay. ` +
+            "Use that computer's address on your network instead, such as ws://192.168.0.10:4848/",
+        );
+      }
     }
-    return new Error(`cannot reach relay at ${this.wsUrl}`);
+    return new RelayUnreachableError(`cannot reach relay at ${this.wsUrl}`);
   }
 
   private nextCreatedAt(): number {
@@ -102,40 +133,167 @@ export class Relay {
     this.watermark = Math.max(this.watermark, createdAt);
   }
 
+  /**
+   * Close the socket, stop reconnecting, and abort every request in flight.
+   *
+   * A `Relay` is not usable afterwards for standing subscriptions, but a
+   * later request opens a fresh connection — `close()` is how settings
+   * changes drop the old one, and the plugin keeps calling methods after it.
+   */
   close(): void {
-    this.socket?.close();
+    this.closed = true;
+    this.epoch += 1;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.failPending(new Error("the relay connection was closed"));
+    this.subscriptions.clear();
+    this.lifetime.abort();
+    this.lifetime = new AbortController();
+    const socket = this.socket;
     this.socket = null;
     this.connecting = null;
+    socket?.close();
+    // Later requests reconnect on demand; only standing subscriptions stop.
+    this.closed = false;
+  }
+
+  private failPending(err: Error): void {
+    for (const [id, waiter] of this.awaitingOk) {
+      this.awaitingOk.delete(id);
+      waiter(["__error", err]);
+    }
+    for (const [id, sub] of this.subscriptions) {
+      if (sub.standing) continue;
+      this.subscriptions.delete(id);
+      sub.onClosed?.(err.message);
+    }
+  }
+
+  private route(socket: WebSocket, msg: any[], onAuthFailed?: (err: Error) => void): boolean {
+    switch (msg[0]) {
+      case "AUTH":
+        if (typeof msg[1] === "string") {
+          // A relay may challenge on connect or mid-connection; answer either.
+          // The answer is signed asynchronously — an extension may prompt,
+          // a bunker is a round trip — so it is sent whenever it is ready.
+          void this.answerAuth(socket, msg[1]).catch((e) => onAuthFailed?.(e));
+        }
+        return false;
+      case "EVENT": {
+        const sub = this.subscriptions.get(String(msg[1]));
+        const event = msg[2] as NostrEvent | undefined;
+        if (sub && event && typeof event.content === "string") {
+          this.observe(event.created_at);
+          sub.onEvent(event);
+        }
+        return false;
+      }
+      case "EOSE":
+        this.subscriptions.get(String(msg[1]))?.onEose?.();
+        return false;
+      case "CLOSED": {
+        const id = String(msg[1]);
+        const sub = this.subscriptions.get(id);
+        if (sub) {
+          this.subscriptions.delete(id);
+          sub.onClosed?.(String(msg[2] ?? ""));
+        }
+        return false;
+      }
+      case "OK": {
+        const waiter = this.awaitingOk.get(String(msg[1]));
+        if (waiter) {
+          this.awaitingOk.delete(String(msg[1]));
+          waiter(msg);
+          return false;
+        }
+        // An OK nobody is waiting for is the answer to our AUTH.
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Whether a relay connection is open right now. Apps show this: "syncing" with
+   * no connection and "syncing" while connected look the same otherwise.
+   */
+  get connected(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  /** Called whenever the connection opens or closes. Returns an unsubscribe. */
+  onConnectionChange(listener: (connected: boolean) => void): () => void {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
+  }
+
+  private connectionListeners = new Set<(connected: boolean) => void>();
+
+  private announceConnection(connected: boolean) {
+    for (const l of this.connectionListeners) {
+      try {
+        l(connected);
+      } catch {
+        /* a listener must not take the socket down */
+      }
+    }
   }
 
   private async connect(): Promise<WebSocket> {
     if (this.socket?.readyState === WebSocket.OPEN) return this.socket;
     if (this.connecting) return this.connecting;
 
+    const epoch = this.epoch;
     this.connecting = new Promise<WebSocket>((resolve, reject) => {
       const socket = new WebSocket(this.wsUrl);
       let settled = false;
+      const current = () => epoch === this.epoch;
 
       const done = (err?: Error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (!err && !current()) {
+          // `close()` ran while this was connecting: nobody wants it now.
+          socket.close();
+          err = new Error("the relay connection was closed");
+        }
         if (err) {
-          this.connecting = null;
+          if (current()) this.connecting = null;
           reject(err);
         } else {
           this.socket = socket;
+          this.connecting = null;
+          this.reconnectDelay = 1000;
+          this.announceConnection(true);
           resolve(socket);
         }
       };
 
-      const timer = setTimeout(() => done(this.unreachable()), 15000);
+      const giveUp = (err: Error) => {
+        done(err);
+        try {
+          socket.close();
+        } catch {
+          /* already gone */
+        }
+      };
+      let timer = setTimeout(() => giveUp(this.unreachable()), 15000);
+      /** Set once the relay has asked us to authenticate. */
+      let challenged = false;
 
       socket.onerror = () => done(this.unreachable());
       socket.onclose = () => {
+        const wasCurrent = this.socket === socket || (!settled && current());
+        done(new RelayUnreachableError("relay closed the connection"));
+        if (!wasCurrent) return;
         this.socket = null;
         this.connecting = null;
-        done(new Error("relay closed the connection"));
+        this.announceConnection(false);
+        this.failPending(new RelayUnreachableError("relay closed the connection"));
+        this.scheduleReconnect();
       };
 
       socket.onopen = () => {
@@ -147,96 +305,185 @@ export class Relay {
         //
         // A relay that never asks is also fine: the grace timer below gives
         // up waiting and proceeds unauthenticated.
-        setTimeout(() => done(), 3000);
+        //
+        // Once challenged, the grace timer no longer applies: the signer may
+        // be a person approving on a phone, and proceeding unauthenticated
+        // meanwhile only gets every request refused.
+        setTimeout(() => {
+          if (!challenged) done();
+        }, 3000);
       };
 
       socket.onmessage = (ev) => {
         const msg = safeParse(ev.data);
         if (!msg) return;
-        if (msg[0] === "AUTH" && typeof msg[1] === "string") {
-          socket.send(JSON.stringify(["AUTH", this.authEvent(msg[1])]));
-          return;
+        if (msg[0] === "AUTH" && !challenged && !settled) {
+          challenged = true;
+          clearTimeout(timer);
+          timer = setTimeout(
+            () => giveUp(new RelayUnreachableError("the relay asked this account to sign in and no signature came")),
+            AUTH_TIMEOUT_MS,
+          );
         }
         // The OK for our AUTH is the signal that the connection is usable.
-        if (msg[0] === "OK") done();
+        if (this.route(socket, msg, (err) => giveUp(err))) done();
       };
     });
     return this.connecting;
   }
 
-  private authEvent(challenge: string) {
-    return this.signer.sign(
-      KIND_CONNECTION_AUTH,
-      [
+  /**
+   * Reopen the socket for the subscriptions that are still wanted.
+   *
+   * Backs off from one second to thirty, and resets on the first success. A
+   * relay that went away and came back re-sends the stored pointer to each
+   * resubscribed filter, so a device that was offline while others wrote
+   * hears about it the moment it is back.
+   */
+  private scheduleReconnect(): void {
+    if (this.closed || this.reconnectTimer) return;
+    if (![...this.subscriptions.values()].some((s) => s.standing)) return;
+    const delay = this.reconnectDelay;
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30_000);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect()
+        .then((socket) => {
+          for (const [id, sub] of this.subscriptions) {
+            if (sub.standing) socket.send(JSON.stringify(["REQ", id, sub.filter]));
+          }
+        })
+        .catch(() => this.scheduleReconnect());
+    }, delay);
+  }
+
+  private async answerAuth(socket: WebSocket, challenge: string): Promise<void> {
+    const event = await this.signer.signEvent({
+      kind: KIND_CONNECTION_AUTH,
+      tags: [
         ["relay", this.wsUrl],
         ["challenge", challenge],
       ],
-      "",
-      this.now(),
-    );
+      content: "",
+      created_at: this.now(),
+    });
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(["AUTH", event]));
   }
 
-  /** One request/response exchange, with the socket's own listener restored after. */
-  private async exchange(send: unknown, isDone: (msg: any[]) => boolean): Promise<any[][]> {
+  /** Send one REQ and collect what it has stored, up to EOSE. */
+  private async query(filter: Record<string, unknown>): Promise<NostrEvent[]> {
     const socket = await this.connect();
-    const collected: any[][] = [];
-
+    const id = `q${this.nextSub++}`;
+    const events: NostrEvent[] = [];
     return new Promise((resolve, reject) => {
-      const previous = socket.onmessage;
-      const timer = setTimeout(() => {
-        socket.onmessage = previous;
-        reject(new Error("relay did not answer"));
-      }, 20000);
-
-      socket.onmessage = (ev) => {
-        const msg = safeParse(ev.data);
-        if (!msg) return;
-        if (msg[0] === "AUTH" && typeof msg[1] === "string") {
-          // A relay may re-challenge mid-connection; answer and keep waiting.
-          socket.send(JSON.stringify(["AUTH", this.authEvent(msg[1])]));
-          return;
+      const finish = (err?: Error) => {
+        clearTimeout(timer);
+        this.subscriptions.delete(id);
+        try {
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(["CLOSE", id]));
+        } catch {
+          /* the socket going away here changes nothing */
         }
-        collected.push(msg);
-        if (isDone(msg)) {
-          clearTimeout(timer);
-          socket.onmessage = previous;
-          resolve(collected);
-        }
+        if (err) reject(err);
+        else resolve(events);
       };
-      socket.send(JSON.stringify(send));
+      const timer = setTimeout(() => finish(new RelayUnreachableError("relay did not answer")), EXCHANGE_TIMEOUT_MS);
+      this.subscriptions.set(id, {
+        filter,
+        standing: false,
+        onEvent: (e) => events.push(e),
+        onEose: () => finish(),
+        onClosed: (reason) => finish(new RelayUnreachableError(`relay closed the query: ${reason || "no reason given"}`)),
+      });
+      socket.send(JSON.stringify(["REQ", id, filter]));
     });
   }
 
+  private pointerFilter(namespace: string): Record<string, unknown> {
+    return { authors: [this.signer.pubkey], kinds: [KIND_POINTER], "#d": [namespace] };
+  }
+
+  /**
+   * Any addressable record this account keeps under `d`, such as the sealed
+   * vault key at `opensync:keys`. A pointer is one of these; so is that.
+   */
+  fetchRecord(d: string): Promise<string | null> {
+    return this.fetchPointer(d);
+  }
+
+  publishRecord(d: string, content: string): Promise<void> {
+    return this.publishPointer(d, content);
+  }
+
   async fetchPointer(namespace: string): Promise<string | null> {
-    const filter = {
-      authors: [this.signer.pubkey],
-      kinds: [KIND_POINTER],
-      "#d": [namespace],
-      limit: 1,
-    };
-    const messages = await this.exchange(["REQ", "p", filter], (m) => m[0] === "EOSE");
-    const event = messages.filter((m) => m[0] === "EVENT").map((m) => m[2]).pop();
-    try {
-      this.socket?.send(JSON.stringify(["CLOSE", "p"]));
-    } catch {
-      /* the socket going away here changes nothing */
-    }
+    const events = await this.query({ ...this.pointerFilter(namespace), limit: 1 });
+    const event = events.sort((a, b) => a.created_at - b.created_at).pop();
     if (!event) return null;
     this.observe(event.created_at);
-    return event.content as string;
+    return event.content;
+  }
+
+  /**
+   * Hear every pointer published to `namespace`, including the stored one.
+   *
+   * A standing REQ with no limit: the relay sends what it holds, then every
+   * accepted event that matches, for as long as the socket is open — and
+   * this reopens it when it drops. The callback gets the sealed pointer; the
+   * caller decides whether it is news. Our own publishes come back too.
+   *
+   * Returns a function that ends the subscription.
+   */
+  subscribePointer(namespace: string, onPointer: (hex: string, createdAt: number) => void): () => void {
+    const id = `live${this.nextSub++}`;
+    const filter = this.pointerFilter(namespace);
+    this.subscriptions.set(id, {
+      filter,
+      standing: true,
+      onEvent: (e) => onPointer(e.content, e.created_at),
+      // A relay that ends a live subscription is asked again later rather
+      // than taken at its word: a restart looks the same from here.
+      onClosed: () => {
+        this.subscriptions.set(id, { filter, standing: true, onEvent: (e) => onPointer(e.content, e.created_at) });
+        this.scheduleReconnect();
+      },
+    });
+    void this.connect()
+      .then((socket) => {
+        if (this.subscriptions.has(id)) socket.send(JSON.stringify(["REQ", id, filter]));
+      })
+      .catch(() => this.scheduleReconnect());
+    return () => {
+      this.subscriptions.delete(id);
+      try {
+        if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(["CLOSE", id]));
+      } catch {
+        /* nothing to tidy */
+      }
+    };
   }
 
   async publishPointer(namespace: string, hexPayload: string): Promise<void> {
-    const event = this.signer.sign(
-      KIND_POINTER,
-      [["d", namespace]],
-      hexPayload,
-      this.nextCreatedAt(),
-    );
-    const messages = await this.exchange(["EVENT", event], (m) => m[0] === "OK");
-    const ok = messages.find((m) => m[0] === "OK");
-    if (ok?.[2]) return;
-    const note = String(ok?.[3] ?? "");
+    const event = await this.signer.signEvent({
+      kind: KIND_POINTER,
+      tags: [["d", namespace]],
+      content: hexPayload,
+      created_at: this.nextCreatedAt(),
+    });
+    const socket = await this.connect();
+    const ok = await new Promise<any[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.awaitingOk.delete(event.id);
+        reject(new RelayUnreachableError("relay did not answer"));
+      }, EXCHANGE_TIMEOUT_MS);
+      this.awaitingOk.set(event.id, (msg) => {
+        clearTimeout(timer);
+        if (msg[0] === "__error") reject(msg[1] instanceof Error ? msg[1] : new Error(String(msg[1])));
+        else resolve(msg);
+      });
+      socket.send(JSON.stringify(["EVENT", event]));
+    });
+    if (ok[2]) return;
+    const note = String(ok[3] ?? "");
     // NIP-01's prefix for "your signature is fine and the answer is still no".
     // The same distinction the 403 gets on the blob path — an app that gets
     // past one meets the other on the same first run.
@@ -244,34 +491,107 @@ export class Relay {
     throw new Error(`relay refused the pointer: ${note || "no reason given"}`);
   }
 
-  private blossomAuth(verb: string): string {
-    const event = this.signer.sign(
-      KIND_BLOSSOM_AUTH,
-      [["t", verb], ["expiration", String(this.now() + 300)]],
-      "",
-      this.now(),
-    );
-    return `Nostr ${btoa(JSON.stringify(event))}`;
+  private async blossomAuth(verb: string): Promise<string> {
+    const event = await this.signer.signEvent({
+      kind: KIND_BLOSSOM_AUTH,
+      tags: [["t", verb], ["expiration", String(this.now() + 300)]],
+      content: "",
+      created_at: this.now(),
+    });
+    // btoa takes Latin-1 only; the event is ASCII unless a tag is not, and
+    // encoding through UTF-8 first keeps a non-ASCII one from throwing.
+    return `Nostr ${btoa(unescape(encodeURIComponent(JSON.stringify(event))))}`;
+  }
+
+  /**
+   * `fetch`, with a timeout, bounded retries and an abort on `close()`.
+   *
+   * Without the timeout a request to a relay that has gone quiet — a laptop
+   * lid closed, a captive portal — never settles, and the status reads
+   * "syncing…" forever. Retries are for what a retry can fix: the network,
+   * a timeout, 429 and 5xx. A 4xx is an answer and is returned as one.
+   * `init` is rebuilt per attempt because an Authorization header carries a
+   * signed event with an expiry.
+   */
+  private async request(url: string, init: () => RequestInit | Promise<RequestInit>, sizeHint = 0): Promise<Response> {
+    const timeoutMs = this.fetchTimeoutMs + Math.ceil(sizeHint / 1_000_000) * 10_000;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      if (attempt > 0) await sleep(Math.min(8000, 500 * 3 ** (attempt - 1)) * (0.75 + Math.random() / 2));
+      const controller = new AbortController();
+      const lifetime = this.lifetime.signal;
+      if (lifetime.aborted) throw new Error("the relay connection was closed");
+      const onClose = () => controller.abort();
+      lifetime.addEventListener("abort", onClose);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      try {
+        const res = await fetch(url, { ...(await init()), signal: controller.signal });
+        if ((res.status === 429 || res.status >= 500) && res.status !== 507 && attempt < this.retries) {
+          lastError = new Error(`${res.status}`);
+          continue;
+        }
+        return res;
+      } catch (e) {
+        if (lifetime.aborted && !timedOut) throw new Error("the relay connection was closed");
+        lastError = timedOut ? new RelayUnreachableError(`the storage server did not answer within ${Math.round(timeoutMs / 1000)} s`) : e;
+      } finally {
+        clearTimeout(timer);
+        lifetime.removeEventListener("abort", onClose);
+      }
+    }
+    if (lastError instanceof RelayUnreachableError) throw lastError;
+    if (lastError instanceof Error && /^\d{3}$/.test(lastError.message)) {
+      throw new Error(`the storage server kept failing (${lastError.message})`);
+    }
+    throw new RelayUnreachableError(`cannot reach the storage server at ${this.httpUrl}`);
   }
 
   async hasBlob(id: string): Promise<boolean> {
-    const res = await fetch(`${this.httpUrl}/${id}`, { method: "HEAD" });
+    const res = await this.request(`${this.httpUrl}/${id}`, () => ({ method: "HEAD" }));
     return res.ok;
   }
 
+  /**
+   * Every blob this account has stored, or `null` if the relay will not say.
+   *
+   * One request instead of one `HEAD` per blob, for the case where a device
+   * has many blobs and no idea which the relay holds — a first sync, or a
+   * sync to a relay it has not used before. Blossom's `/list` is optional,
+   * so anything but a JSON array is "ask the slow way".
+   */
+  async listBlobs(): Promise<Set<string> | null> {
+    try {
+      const res = await this.request(`${this.httpUrl}/list/${this.signer.pubkey}`, () => ({ method: "GET" }));
+      if (!res.ok) return null;
+      const body = await res.json();
+      if (!Array.isArray(body)) return null;
+      return new Set(body.map((row: { sha256?: string }) => String(row?.sha256 ?? "")).filter(Boolean));
+    } catch {
+      return null;
+    }
+  }
+
   async getBlob(id: string): Promise<Uint8Array | null> {
-    const res = await fetch(`${this.httpUrl}/${id}`);
+    const res = await this.request(`${this.httpUrl}/${id}`, () => ({ method: "GET" }));
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`fetching a blob failed: ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   }
 
   async putBlob(bytes: Uint8Array): Promise<void> {
-    const res = await fetch(`${this.httpUrl}/upload`, {
-      method: "PUT",
-      headers: { Authorization: this.blossomAuth("upload") },
-      body: bytes as BodyInit,
-    });
+    const res = await this.request(
+      `${this.httpUrl}/upload`,
+      async () => ({
+        method: "PUT",
+        headers: { Authorization: await this.blossomAuth("upload") },
+        body: bytes as BodyInit,
+      }),
+      bytes.length,
+    );
     if (res.status === 413) {
       // A 413 has two quite different causes and they need different answers.
       // The relay says "quota exceeded" in a JSON body when you are actually
@@ -306,10 +626,10 @@ export class Relay {
    */
   async deleteBlob(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.httpUrl}/${id}`, {
+      const res = await this.request(`${this.httpUrl}/${id}`, async () => ({
         method: "DELETE",
-        headers: { Authorization: this.blossomAuth("delete") },
-      });
+        headers: { Authorization: await this.blossomAuth("delete") },
+      }));
       return res.ok || res.status === 404;
     } catch {
       return false;
@@ -321,6 +641,20 @@ export class QuotaError extends Error {
   constructor(detail: string) {
     super(`storage is full: ${detail}`);
     this.name = "QuotaError";
+  }
+}
+
+/**
+ * The relay could not be reached, or stopped answering.
+ *
+ * Its own class so an interface can say "offline — will retry" and mean it:
+ * unlike `QuotaError` and `NotAdmittedError`, this is the one failure that
+ * waiting fixes.
+ */
+export class RelayUnreachableError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "RelayUnreachableError";
   }
 }
 
@@ -356,6 +690,10 @@ function reason(detail: string): string {
     // Not JSON. The text is the reason.
   }
   return detail;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function safeParse(data: unknown): any[] | null {
