@@ -11,6 +11,8 @@
 //
 // It wants a relay binary from the engine beside this repository:
 //   cargo build --release -p opensync-relay --manifest-path ../opensync/Cargo.toml
+import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
+import { npubEncode, nsecEncode } from "nostr-tools/nip19";
 import { environment, failed, ok, sleep } from "./harness.mjs";
 
 const env = await environment();
@@ -32,7 +34,15 @@ try {
   // ---- setting it up, through the pane -------------------------------------
   const pane = await A.openSettings();
   ok(pane.heading === "Set up", `a vault with no keys leads with setting up (${pane.heading})`);
-  ok(pane.names[0] === "Join from a code", `and offers joining before the key fields (${JSON.stringify(pane.names.slice(0, 3))})`);
+  ok(pane.names[0] === "Sign in with Nostr" && pane.names[1] === "Join from a code",
+     `and offers signing in with Nostr, then joining, before the key fields (${JSON.stringify(pane.names.slice(0, 3))})`);
+  const secretFields = await A.paneEval(() =>
+    [...document.querySelectorAll(".vertical-tab-content input")]
+      .filter((i) => i.type === "password")
+      .map((i) => i.closest(".setting-item")?.querySelector(".setting-item-name")?.textContent),
+  );
+  ok(["Sign in with Nostr", "Join from a code", "Vault key", "Account key"].every((n) => secretFields.includes(n)),
+     `every field that can carry a secret is masked (${JSON.stringify(secretFields)})`);
 
   await A.type("Relay address", env.relay.ws);
   await A.type("Storage address", env.relay.http);
@@ -270,6 +280,132 @@ try {
      `and syncs again${backInStep.errors.length ? " " + JSON.stringify(backInStep.errors) : ""} (${backInStep.status})`);
   ok(await B.read("hello.md") === "# Hello from A\n\nline one\nline two\n",
      "reading the vault again, under the key it was re-sealed with");
+
+  // ---- signing in with Nostr -------------------------------------------------
+  // A throwaway key made here and nowhere else, against the check's own relay
+  // and — when one is built — its own accounts server.
+  const sk = generateSecretKey();
+  const nsec = nsecEncode(sk);
+  const npub = npubEncode(getPublicKey(sk));
+  const base = env.accounts?.base ?? null;
+  console.log(base ? `\naccounts server ${base}` : "\nno accounts server built — the account half is checked as unreachable only");
+
+  /** Everything the pane shows or holds, so a key cannot hide in a field. */
+  const paneText = (d) =>
+    d.paneEval(() => {
+      const el = [...document.querySelectorAll(".vertical-tab-content")].find((e) => e.offsetParent !== null) ?? document.body;
+      return el.textContent + " " + [...el.querySelectorAll("input")].map((i) => i.value).join(" ");
+    });
+
+  let C = await env.open("vaultC");
+  // Unreachable unless a server was started: the sign-in must succeed anyway.
+  await C.eval((b) => (window.opensyncAccountsBase = b), base ?? "http://127.0.0.1:9");
+  await C.write("from-c.md", "written on C before signing in\n");
+  await C.openSettings();
+  await C.type("Relay address", env.relay.ws);
+  await C.type("Storage address", env.relay.http);
+  await C.type("Sign in with Nostr", nsec);
+  await C.press("Sign in with Nostr", "Sign in");
+  await C.waitForLine(/^Signed in, and a vault made for your account/, 90_000);
+  const cBox = await C.pairingBox();
+  const cKeys = await C.settings();
+  ok(cKeys.nostr?.kind === "key" && cKeys.namespaceKey.startsWith("ovault1"),
+     `a fresh vault signs in with an nsec and a vault is made for the account (${JSON.stringify(cBox.lines)})`);
+  if (base) {
+    ok(cBox.lines.some((l) => /Signed in to your OpenApps account/.test(l)) && cKeys.account?.id,
+       `the same key signs in to the OpenApps account (${JSON.stringify(cKeys.account)})`);
+  } else {
+    ok(cBox.lines.some((l) => /could not be reached/.test(l)), "an unreachable account server is said, and is not fatal");
+  }
+  const cPane = await C.openSettings();
+  ok(cPane.heading === "Account" && cPane.names[0] === "Signed in with Nostr",
+     `a signed-in device shows its account, not an offer to make one (${JSON.stringify(cPane.names.slice(0, 3))})`);
+  const onPane = await paneText(C);
+  ok(!onPane.includes(nsec) && !onPane.includes(nsec.slice(5, 25)), "the nsec appears nowhere in the pane, field or text");
+  ok(onPane.includes(npub.slice(0, 12)), "the npub it signed in as is shown, shortened");
+  if (base) ok(onPane.includes(cKeys.account?.id ?? "\u0000"), "and so is the OpenApps account");
+  const cStored = await C.read(".obsidian/plugins/opensync/data.json");
+  const inKeychain = await C.eval(() => typeof window.app.secretStorage?.getSecret === "function");
+  ok(!inKeychain || !cStored.includes(nsec),
+     inKeychain ? "the nsec is kept in Obsidian's secret storage, not data.json" : "no secret storage here; the nsec is in data.json");
+  await C.closeSettings();
+  const cFirst = await C.sync();
+  ok(cFirst.status === "OpenSync: up to date" && cFirst.errors.length === 0, `C syncs as the Nostr key (${cFirst.status})`);
+
+  // A device with keys of its own moves to the Nostr sign-in. Two presses,
+  // and what it held is merged into the account rather than lost.
+  await A.eval(() => (window.opensyncAccountsBase = "http://127.0.0.1:9"));
+  const aFilesBefore = await A.files();
+  await A.openSettings();
+  await A.type("Move to a Nostr sign-in", nsec);
+  await A.press("Move to a Nostr sign-in", "Sign in");
+  await sleep(300);
+  ok((await A.pairingBox()).lines.some((l) => /already syncs with keys of its own/.test(l)),
+     "moving an already set-up device to Nostr asks first");
+  ok(!(await A.settings()).nostr, "and changes nothing on the first press");
+  await A.press("Move to a Nostr sign-in", "Sign in — press again");
+  await A.waitForLine(/^Signed in\. This device joined your vault/, 90_000);
+  const aBox = await A.pairingBox();
+  ok(aBox.lines.some((l) => /could not be reached/.test(l)) && (await A.settings()).nostr?.kind === "key",
+     "an unreachable account server does not stop the sign-in");
+  ok((await A.settings()).namespaceKey === cKeys.namespaceKey, "A now holds the vault key sealed to the Nostr account");
+  await A.closeSettings();
+  await A.settle();
+  await A.sync();
+  await C.sync();
+  await A.sync();
+  ok(await A.read("from-c.md") === "written on C before signing in\n", "A reads what C wrote under the Nostr account");
+  ok(aFilesBefore.includes("hello.md") && (await C.files()).includes("hello.md"),
+     "and what A held before is merged into the account, reaching C");
+
+  // Rotation re-seals the record, so signing in again hands out the new key.
+  await C.openSettings();
+  await C.press("Rotate the vault key", "Rotate");
+  await sleep(300);
+  await C.press("Rotate the vault key");
+  await C.waitForLine(/^Done\. Sign out and in again/, 90_000);
+  ok((await C.pairingBox()).lines.some((l) => /Sealed the new key to your Nostr account/.test(l)),
+     "a rotation re-seals the vault key to the Nostr account");
+  const cRotated = (await C.settings()).namespaceKey;
+  await C.closeSettings();
+
+  await A.openSettings();
+  await A.press("Sign out", "Sign out");
+  await sleep(300);
+  ok((await A.settings()).nostr?.kind === "key", "signing out takes two presses");
+  await A.press("Sign out", "Sign out — press again");
+  await A.waitForLine(/^Signed out/);
+  const signedOut = await A.settings();
+  ok(!signedOut.nostr && !signedOut.accountSecret && !signedOut.namespaceKey, "signing out clears the keys and the sign-in");
+  ok((await A.openSettings()).heading === "Set up", "and the pane offers setting up again");
+  await A.type("Sign in with Nostr", nsec);
+  await A.press("Sign in with Nostr", "Sign in");
+  await A.waitForLine(/^Signed in\. This device joined your vault/, 90_000);
+  ok((await A.settings()).namespaceKey === cRotated, "signing in again picks up the rotated key from the relay");
+  await A.closeSettings();
+  await A.settle();
+  const aBack = await A.sync();
+  ok(aBack.status === "OpenSync: up to date" && aBack.errors.length === 0, `and syncs under it (${aBack.status})`);
+
+  // A restart reads the key back out of wherever it was kept.
+  C = await env.restart(C);
+  const cAfter = await C.settings();
+  ok(cAfter.accountSecret === nsec && cAfter.nostr?.kind === "key", "the Nostr sign-in survives a restart");
+  const cAgain = await C.sync();
+  ok(cAgain.status === "OpenSync: up to date" && cAgain.errors.length === 0, `and syncs after it (${cAgain.status})`);
+  if (inKeychain) {
+    await C.openSettings();
+    await C.press("Sign out", "Sign out");
+    await sleep(300);
+    await C.press("Sign out", "Sign out — press again");
+    await C.waitForLine(/^Signed out/);
+    const left = await C.eval(() => {
+      const p = window.app.plugins.plugins.opensync;
+      return window.app.secretStorage.getSecret(p.settings.secretId) ?? "";
+    });
+    ok(!left.includes(nsec), "signing out empties the secret-storage entry");
+    await C.closeSettings();
+  }
 } finally {
   await env.stop(keep || failed() > 0);
 }

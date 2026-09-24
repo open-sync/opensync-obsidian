@@ -106,6 +106,57 @@ async function startRelay(root) {
 }
 
 /**
+ * A local OpenApps account server, if one has been built.
+ *
+ * Optional: the account half of a Nostr sign-in is non-fatal by design, and a
+ * machine without the server still runs every sync assertion. Its own port,
+ * database and signing key under the check's temporary directory — never a
+ * production account.
+ */
+async function startAccounts(root) {
+  const bin = process.env.OPENAPPS_SERVER ?? join(REPO, "../target/debug/openapps-server");
+  if (!existsSync(bin)) return null;
+  const dir = join(root, "accounts");
+  mkdirSync(dir, { recursive: true });
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const config = join(dir, "config.toml");
+  writeFileSync(
+    config,
+    [
+      "[server]",
+      `bind = "127.0.0.1:${port}"`,
+      `public_url = "${base}"`,
+      `database_path = ${JSON.stringify(join(dir, "openapps.db"))}`,
+      'allowed_origins = ["http://localhost:5173"]',
+      "[auth]",
+      `jwt_key_path = ${JSON.stringify(join(dir, "jwt.pem"))}`,
+      "[ratelimit]",
+      "enabled = false",
+    ].join("\n"),
+  );
+  const child = spawn(bin, [], { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, OPENAPPS_CONFIG: config } });
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d.toString()));
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${base}/v1/auth/challenge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"namespace":"nostr"}',
+      });
+      if (res.ok) return { base, stop: () => child.kill() };
+    } catch {
+      // Not listening yet.
+    }
+    await sleep(200);
+  }
+  child.kill();
+  throw new Error(`the accounts server at ${bin} never answered\n${stderr.slice(-2000)}`);
+}
+
+/**
  * One Obsidian, on its own profile, with a vault already open and the debugger
  * listening. Obsidian asks whether it trusts the vault's author before it will
  * load a community plugin; the check answers that the way a person does,
@@ -344,7 +395,8 @@ function device(browser, page, child, profile, name) {
           (e) => e.querySelector(".setting-item-name")?.textContent === setting,
         );
         if (!item) throw new Error(`no setting called ${setting}`);
-        const input = item.querySelector("input[type=text]");
+        // Secrets are password fields; typing into one is the same act.
+        const input = item.querySelector("input[type=text], input[type=password]");
         input.value = value;
         input.dispatchEvent(new Event("input"));
         await new Promise((r) => setTimeout(r, 200));
@@ -514,10 +566,12 @@ function device(browser, page, child, profile, name) {
 export async function environment() {
   const root = mkdtempSync(join(tmpdir(), "opensync-obsidian-check-"));
   const relay = await startRelay(root);
+  const accounts = await startAccounts(root);
   const devices = [];
   const env = {
     root,
     relay,
+    accounts,
     async open(name, port, extraArgs = []) {
       // Whatever the OS hands out, never a fixed number: a fixed one is how a
       // run attaches to the last run's window.
@@ -542,6 +596,7 @@ export async function environment() {
     async stop(keep) {
       for (const d of devices) await d.quit().catch(() => undefined);
       relay.stop();
+      accounts?.stop();
       if (!keep) rmSync(root, { recursive: true, force: true });
       else console.log(`\nkept everything under ${root}`);
     },

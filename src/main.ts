@@ -1,10 +1,12 @@
 import {
   App,
+  ButtonComponent,
   Notice,
   Platform,
   Plugin,
   PluginSettingTab,
   Setting,
+  TextComponent,
   TFile,
   normalizePath,
   requestUrl,
@@ -1245,6 +1247,30 @@ function today(): string {
     .slice(0, 10);
 }
 
+/** A text field for a secret: masked, never autofilled, never spellchecked. */
+function masked(t: TextComponent): TextComponent {
+  t.inputEl.type = "password";
+  t.inputEl.autocomplete = "off";
+  t.inputEl.spellcheck = false;
+  return t;
+}
+
+/** The eye beside a masked field. Showing a key is always a deliberate press. */
+function revealer(setting: Setting, input: () => HTMLInputElement | null): Setting {
+  return setting.addExtraButton((b) =>
+    b
+      .setIcon("eye")
+      .setTooltip("Show")
+      .onClick(() => {
+        const el = input();
+        if (!el) return;
+        const hidden = el.type === "password";
+        el.type = hidden ? "text" : "password";
+        b.setIcon(hidden ? "eye-off" : "eye").setTooltip(hidden ? "Hide" : "Show");
+      }),
+  );
+}
+
 class OpenSyncSettingTab extends PluginSettingTab {
   /**
    * What the pane should say once it has been rebuilt.
@@ -1254,7 +1280,8 @@ class OpenSyncSettingTab extends PluginSettingTab {
    * Everything it had to say went with it: how many files were re-sealed, how
    * many stranded blobs were swept, and that every other device has to be
    * paired again. On the one operation here that cannot be undone, the screen
-   * went blank and looked like nothing had happened.
+   * went blank and looked like nothing had happened. Signing in and out end
+   * the same way, for the same reason.
    */
   private carry: string[] = [];
 
@@ -1265,88 +1292,533 @@ class OpenSyncSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    // Scoped to this render: closing the settings pane and coming back is a
-    // way to change your mind about replacing a key.
-    let replacing = false;
 
-    this.devicesSection(containerEl);
+    // "Has this device been set up before" is "does it hold keys". If it
+    // does, the pane shows the account it is in and never offers to make a
+    // new one over it; setting up is only on offer to a device with nothing.
+    if (this.plugin.configured) this.accountSection(containerEl);
+    else this.setupSection(containerEl);
 
+    this.optionsSection(containerEl);
+    this.advancedSection(containerEl);
+  }
+
+  /** The box every section reports into, holding what the last render left. */
+  private statusBox(containerEl: HTMLElement): HTMLElement {
+    const status = containerEl.createDiv({ cls: "opensync-pairing" });
+    for (const line of this.carry) status.createEl("p", { text: line });
+    this.carry = [];
+    return status;
+  }
+
+  /* ------------------------------------------------------------ set up */
+
+  /**
+   * Every way onto the account, for a device with nothing yet.
+   *
+   * Signing in with Nostr leads, because it is the one that needs no other
+   * device and nothing copied: the key finds the vault. A code from another
+   * device is next. Typing keys by hand is last and folded away — it is the
+   * escape hatch, and putting it first taught every new install to copy a
+   * vault key by hand, which is the one step where a mistake is silent and
+   * permanent.
+   */
+  private setupSection(containerEl: HTMLElement): void {
+    const settings = this.plugin.settings;
+    new Setting(containerEl).setName("Set up").setHeading();
+    const status = this.statusBox(containerEl);
+
+    let key = "";
     new Setting(containerEl)
-      .setName("Relay address")
+      .setName("Sign in with Nostr")
       .setDesc(
-        Platform.isMobile
-          ? "The address of the computer running your relay, on your network — not 127.0.0.1, which is this phone."
-          : "The WebSocket address of your relay. Point it anywhere — including a relay you run yourself.",
+        "Your Nostr key is your OpenSync account. The vault key is sealed to it on the relay, so every device you sign in on with the same key opens this vault — there is nothing else to copy, and the first sign-in makes the vault. " +
+          "Paste your nsec, or keep the key in nsec.app, Amber or another remote signer and paste its bunker:// address instead. Signs you in to your OpenApps account too.",
       )
-      .addText((t) =>
-        t.setValue(this.plugin.settings.relayWs).onChange(async (v) => {
-          this.plugin.settings.relayWs = v.trim();
-          await this.plugin.saveSettings();
-        }),
+      .addText((t) => masked(t).setPlaceholder("nsec1… or bunker://…").onChange((v) => (key = v)))
+      .addButton((b) =>
+        b
+          .setButtonText("Sign in")
+          .setCta()
+          .onClick(() => void this.signIn(key, status, b)),
       );
 
+    let typed = "";
     new Setting(containerEl)
-      .setName("Storage address")
-      .setDesc("Where file contents are stored. Usually the same host and port as the relay.")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.relayHttp).onChange(async (v) => {
-          this.plugin.settings.relayHttp = v.trim();
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("Vault key")
+      .setName("Join from a code")
       .setDesc(
-        "Starts ovault1. This is what encrypts everything before it leaves this device. Copy it to your other devices, and keep a copy somewhere safe — nobody, including us, can recover it for you.",
+        "On a device that already has this account, ask for a pairing code — `opensync pair`, or the Add a device button in its settings. Paste the whole opensync://pair… line it shows, or type the ten characters and fill in the relay address under Relay and keys. An opensync://account… link or a pasted recovery kit works here too. The keys are never shown and never typed.",
       )
-      .addText((t) =>
-        t
-          .setPlaceholder("ovault1…")
-          .setValue(this.plugin.settings.namespaceKey)
-          .onChange(async (v) => {
-            this.plugin.settings.namespaceKey = v.trim();
-            await this.plugin.saveSettings();
+      .addText((t) => masked(t).setPlaceholder("9x4k-tv2q8m, or opensync://pair…").onChange((v) => (typed = v)))
+      .addButton((b) =>
+        b
+          .setButtonText("Join")
+          .onClick(async () => {
+            status.empty();
+            const text = typed.trim();
+            if (!text) {
+              status.setText("Type the code from the other device first.");
+              return;
+            }
+            try {
+              await ready();
+              // An account link or a kit is not a join at all: nothing
+              // answers, nothing is negotiated. Checked before the invitation
+              // parse, because both links start opensync:// and reading one as
+              // the other fails with a message about a missing pairing code.
+              if (text.startsWith("opensync://account")) {
+                const link = readAccountLink(text) as { accountSecret: string; namespaceKey: string; relayWs: string };
+                const ws = link.relayWs || settings.relayWs;
+                await this.adopt(link.accountSecret, link.namespaceKey, ws, storageFor(ws));
+                new Notice("OpenSync: set up from the account link");
+                return;
+              }
+              if (looksLikeKit(text)) {
+                // The kit carries no relay — paper outlives a hostname — so
+                // the relay already in the settings is the one it is for.
+                const kit = readRecoveryKit(text) as { accountSecret: string; namespaceKey: string };
+                if (!settings.relayWs) {
+                  status.setText("Fill in the relay address under Relay and keys first; a recovery kit does not carry one.");
+                  return;
+                }
+                await this.adopt(kit.accountSecret, kit.namespaceKey, settings.relayWs, settings.relayHttp);
+                new Notice("OpenSync: set up from the recovery kit");
+                return;
+              }
+            } catch (e) {
+              status.setText(`Did not set up: ${message(e)}`);
+              return;
+            }
+            // An invitation carries the relay with it, and wins over the
+            // field below: a device that has just been handed one is a device
+            // that was never told where the relay is, and a stale address
+            // left in the field is not what the person meant.
+            let ws = settings.relayWs;
+            try {
+              ws = Invitation.parse(text).relayWs;
+            } catch {
+              // Ten characters on their own. The relay has to come from
+              // somewhere, and on a fresh phone there is nothing there —
+              // which used to mean two minutes of asking nobody.
+            }
+            if (!ws) {
+              status.setText(
+                "Fill in the relay address from the other device, or paste the whole opensync://pair… line it showed.",
+              );
+              return;
+            }
+            status.setText(`Asking ${ws} for that account…`);
+            try {
+              const granted = await joinAccount(ws, text);
+              const reachable = endpointsFor(ws, granted);
+              settings.namespace = granted.namespace;
+              await this.adopt(granted.accountSecret, granted.namespaceKey, reachable.ws, reachable.http);
+              new Notice(`Joined the account on ${granted.grantedBy} (${granted.accountId})`);
+            } catch (e) {
+              status.setText(`Did not join: ${message(e)}`);
+            }
           }),
+      );
+  }
+
+  /** Keys that arrived whole — by pairing, a link or a kit — made this device's. */
+  private async adopt(accountSecret: string, namespaceKey: string, ws: string, http: string): Promise<void> {
+    const settings = this.plugin.settings;
+    settings.accountSecret = accountSecret;
+    settings.namespaceKey = namespaceKey;
+    settings.nostr = undefined;
+    settings.relayWs = ws;
+    settings.relayHttp = http;
+    await this.plugin.saveSettings();
+    this.display();
+  }
+
+  /**
+   * Sign in with whatever was pasted: an nsec, or a remote signer's address.
+   *
+   * One field for both, because a person holding either has no reason to
+   * know which of our words it is called. The field is a password field and
+   * nothing here ever writes the key back into the pane.
+   */
+  private async signIn(value: string, status: HTMLElement, button: ButtonComponent): Promise<void> {
+    status.empty();
+    const text = value.trim();
+    if (!text) {
+      status.setText("Paste your nsec, or your remote signer's bunker:// address, first.");
+      return;
+    }
+    const say = (line: string) => status.createEl("p", { text: line });
+    const secret = isSecretKey(text);
+    const open = secret
+      ? async (): Promise<NostrSigner> => {
+          await ready();
+          return Signer.fromHex(parseAccountKey(text));
+        }
+      : (): Promise<NostrSigner> => {
+          say("Asking your remote signer. Approve this device there if it asks.");
+          return RemoteSigner.open(text, {
+            onAuthUrl: (url) => {
+              const line = status.createEl("p", { text: "Your signer asks you to approve this device: " });
+              line.createEl("a", { text: url, href: url });
+            },
+          });
+        };
+    button.setDisabled(true);
+    const lines: string[] = [];
+    try {
+      await this.plugin.signInNostr(open, secret ? text : "", (line) => {
+        lines.push(line);
+        say(line);
+      });
+      this.carry = lines;
+      this.display();
+    } catch (e) {
+      say(`Did not sign in: ${message(e)}`);
+    } finally {
+      button.setDisabled(false);
+    }
+  }
+
+  /* ----------------------------------------------------------- account */
+
+  /** Who this device syncs as, and everything that can be done about it. */
+  private accountSection(containerEl: HTMLElement): void {
+    const plugin = this.plugin;
+    const settings = plugin.settings;
+    const nostr = settings.nostr;
+    new Setting(containerEl).setName("Account").setHeading();
+    const status = this.statusBox(containerEl);
+    // Rotation is irreversible and destroys access for every device that is
+    // not re-paired, so it takes two presses; so do signing out and moving
+    // to a Nostr sign-in. Scoped to this render of the pane, which means
+    // closing settings and coming back is itself a way to change your mind.
+    let confirmed = false;
+    let leaving = false;
+    let moving = false;
+
+    const npub = plugin.npub;
+    const who = npub ? shortNpub(npub) : "a key this device cannot read";
+    new Setting(containerEl)
+      .setName(nostr ? "Signed in with Nostr" : "Signed in with this device's own keys")
+      .setDesc(
+        nostr
+          ? `As ${who}, ${
+              nostr.kind === "bunker"
+                ? "through your remote signer. Your key stays in the signer."
+                : plugin.secretsInKeychain
+                  ? "with the key kept in Obsidian's secret storage on this device."
+                  : "with the key kept in this vault's plugin settings — this version of Obsidian has no secret storage."
+            }`
+          : `Syncs as ${who}, with keys made for this account rather than a Nostr sign-in.`,
+      );
+
+    if (nostr) {
+      const account = new Setting(containerEl).setName("OpenApps account");
+      const known = settings.account;
+      const named = known ? `${known.name} (${known.id})` : "";
+      if (!plugin.session) {
+        account.setDesc("Not signed in to the account server. Sync works without it.").addButton((b) =>
+          b.setButtonText("Connect").onClick(async () => {
+            b.setDisabled(true);
+            account.setDesc("Connecting…");
+            this.carry = [await plugin.connectAccount()];
+            this.display();
+          }),
+        );
+      } else {
+        account.setDesc(named || "Checking…");
+        plugin.refreshAccount().then(
+          (me) => {
+            if (me) account.setDesc(`${me.name} (${me.id})`);
+            else this.display();
+          },
+          () => account.setDesc(`${named ? `${named} — ` : ""}account server unreachable. Sync works without it.`),
+        );
+      }
+    }
+
+    const state = new Setting(containerEl).setName("Status").setDesc(plugin.statusText);
+    state.addButton((b) =>
+      b.setButtonText("Sync now").onClick(async () => {
+        b.setDisabled(true);
+        state.setDesc("syncing…");
+        await plugin.sync(true);
+        state.setDesc(plugin.statusText);
+        b.setDisabled(false);
+      }),
+    );
+
+    if (nostr) {
+      new Setting(containerEl)
+        .setName("Add a device")
+        .setDesc(
+          "On the other device, choose Sign in with Nostr and use the same key" +
+            (nostr.kind === "bunker" ? " — or the same remote signer" : "") +
+            ". It finds this vault by itself; there is nothing to copy and no key to show.",
+        );
+    } else {
+      this.pairingSetting(containerEl, status);
+      this.moveToNostr(containerEl, status, () => {
+        if (moving) return true;
+        moving = true;
+        return false;
+      });
+    }
+
+    new Setting(containerEl)
+      .setName("Rotate the vault key")
+      .setDesc(
+        "Re-seals this vault under a new key, so everything on the relay under the old one becomes unreadable. " +
+          "This is the only real delete there is: a relay may ignore a deletion request, and anything ever " +
+          "fetched was ever copied. " +
+          (nostr
+            ? "Every other device must sign out and sign in again afterwards, which hands it the new key."
+            : "Every device you keep must be paired again afterwards — there is no " +
+              "announcement, because one that reached your devices would reach the device you are rotating away from."),
       )
       .addButton((b) =>
-        // Two presses when there is a key to lose, matching the Rotate button
-        // rather than asking `window.confirm`. On mobile that dialog is not
-        // guaranteed to appear at all, and a blocked one reads as a button
-        // that silently does nothing — on the control that decides whether a
-        // vault stays readable.
-        b.setButtonText(replacing ? "Generate — press again" : "Generate").onClick(async () => {
-          if (this.plugin.settings.namespaceKey && !replacing) {
-            replacing = true;
-            b.setButtonText("Generate — press again").setWarning();
-            new Notice(
-              "This replaces the vault key. Anything already synced under the old one becomes unreadable — press again to go ahead.",
-            );
+        b.setButtonText("Rotate").setWarning().onClick(async () => {
+          status.empty();
+
+          // One key covers every namespace on the account, and this plugin
+          // only re-seals its own. Saying so before the button is pressed
+          // rather than after is the difference between a warning and a
+          // post-mortem.
+          if (!confirmed) {
+            confirmed = true;
+            b.setButtonText("Rotate — press again");
+            status.createEl("p", {
+              text:
+                "This re-seals the vault only. If the same key also syncs a clipboard or a password store, " +
+                "rotate those from their own app first — this cannot reach them, and afterwards nothing can.",
+            });
+            status.createEl("p", {
+              text: nostr
+                ? "Every other device loses access until it signs in again. Press Rotate once more to go ahead."
+                : "Every other device loses access until it is paired again. Press Rotate once more to go ahead.",
+            });
             return;
           }
-          replacing = false;
-          this.plugin.settings.namespaceKey = Namespace.generateKey();
-          await this.plugin.saveSettings();
-          this.display();
+          confirmed = false;
+          b.setButtonText("Rotate").setDisabled(true);
+
+          const progress: string[] = [];
+          try {
+            const key = await plugin.rotate((line) => {
+              progress.push(line);
+              status.createEl("p", { text: line });
+            });
+            plugin.settings.namespaceKey = key;
+            await plugin.saveSettings();
+            // Handed to the next render rather than written here: `display()`
+            // is what puts the new key in its field, and it empties this box
+            // on the way.
+            this.carry = [
+              ...progress,
+              nostr
+                ? "Done. Sign out and in again on each device you are keeping."
+                : 'Done. Use "Add a device" to pair each device you are keeping.',
+            ];
+            this.display();
+          } catch (e) {
+            status.createEl("p", { text: `Rotation stopped: ${message(e)}` });
+          } finally {
+            b.setDisabled(false);
+          }
         }),
       );
 
+    if (nostr) {
+      new Setting(containerEl)
+        .setName("Recovery")
+        .setDesc(
+          "Your Nostr key is the way back in: sign in with it on any device and the vault key comes with it. " +
+            "Keep your nsec backed up wherever you already keep it safe — this plugin never shows it.",
+        );
+    } else {
+      this.kitSetting(containerEl, status);
+    }
+
     new Setting(containerEl)
-      .setName("Account key")
-      .setDesc("Starts nsec1. This is a Nostr key and identifies you to the relay — it never sees your notes.")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.accountSecret).onChange(async (v) => {
-          this.plugin.settings.accountSecret = v.trim();
-          await this.plugin.saveSettings();
-        }),
+      .setName("Sign out")
+      .setDesc(
+        nostr
+          ? "Removes your key and the vault key from this device. The notes here stay, and so does your vault on the relay — sign in again to pick it back up."
+          : "Removes this account's keys from this device. The notes here stay. Without another device or the recovery kit there is no way back into the vault on the relay.",
       )
       .addButton((b) =>
-        b.setButtonText("Generate").onClick(async () => {
-          this.plugin.settings.accountSecret = generateAccountKey();
-          await this.plugin.saveSettings();
-          this.display();
+        b.setButtonText("Sign out").setWarning().onClick(async () => {
+          status.empty();
+          if (!leaving) {
+            leaving = true;
+            b.setButtonText("Sign out — press again");
+            status.createEl("p", {
+              text: nostr
+                ? "This device stops syncing until you sign in again. Press Sign out once more to go ahead."
+                : "Print the recovery kit first if no other device has this account. Press Sign out once more to go ahead.",
+            });
+            return;
+          }
+          leaving = false;
+          b.setDisabled(true);
+          try {
+            await plugin.signOut();
+            this.carry = ["Signed out. The notes in this vault stay where they are."];
+            this.display();
+          } catch (e) {
+            status.createEl("p", { text: `Did not sign out: ${message(e)}` });
+            b.setDisabled(false);
+          }
         }),
       );
+  }
+
+  /**
+   * For a device set up with keys of its own: sign in with Nostr instead.
+   *
+   * Offered, never pushed, and two presses. The vault this device holds comes
+   * along — sealed to the Nostr account if the account has none yet, merged
+   * into the account's if it has — but it is still a change of identity on
+   * a device that works.
+   */
+  private moveToNostr(containerEl: HTMLElement, status: HTMLElement, armed: () => boolean): void {
+    let key = "";
+    new Setting(containerEl)
+      .setName("Move to a Nostr sign-in")
+      .setDesc(
+        "Sync as your Nostr key instead, so any device you sign in on opens this vault with nothing to pair. Paste your nsec or a remote signer's bunker:// address.",
+      )
+      .addText((t) => masked(t).setPlaceholder("nsec1… or bunker://…").onChange((v) => (key = v)))
+      .addButton((b) =>
+        b.setButtonText("Sign in").onClick(() => {
+          status.empty();
+          if (!key.trim()) {
+            status.setText("Paste your nsec, or your remote signer's bunker:// address, first.");
+            return;
+          }
+          if (!armed()) {
+            b.setButtonText("Sign in — press again");
+            status.createEl("p", {
+              text:
+                "This device already syncs with keys of its own. Signing in moves it to your Nostr account and keeps what this vault holds: " +
+                "it becomes the account's vault if the account has none, or is merged into the one it has. " +
+                "Other devices on the old keys keep syncing with each other until they sign in too. Press Sign in once more to go ahead.",
+            });
+            return;
+          }
+          void this.signIn(key, status, b);
+        }),
+      );
+  }
+
+  private pairingSetting(containerEl: HTMLElement, status: HTMLElement): void {
+    const settings = this.plugin.settings;
+    new Setting(containerEl)
+      .setName("Add a device")
+      .setDesc(
+        "Shows a ten-character code, good for one device and one attempt. The vault key is never displayed and never crosses the relay in a form the relay can read.",
+      )
+      .addButton((b) =>
+        b
+          .setButtonText("Show a code")
+          .setCta()
+          .onClick(async () => {
+            b.setDisabled(true);
+            status.empty();
+            try {
+              await ready();
+              const code = PairingCode.generate();
+              const invitation = new Invitation(settings.relayWs, code);
+
+              // The QR first, because it carries the relay address — which is
+              // the half people mistype — and because a phone is the device
+              // most likely to be joining and the worst one to type on.
+              const canvas = status.createEl("canvas", { cls: "opensync-qr" });
+              drawInvitation(canvas, invitation, { moduleSize: 6 });
+
+              // Three ways to carry the same thing, because the right one
+              // depends on what the joining device is. A phone scans. A second
+              // computer, which cannot point a camera at this screen, gets one
+              // line to copy. Anything else reads ten characters aloud — and
+              // then needs the relay address too, which is the half that gets
+              // mistyped.
+              status.createEl("p", { text: "Scan that, paste this line on the other device:" });
+              status.createEl("p", { text: invitation.uri, cls: "opensync-invite" });
+              status.createEl("p", { text: "…or type both of these:" });
+              status.createEl("p", { text: `code   ${code.text}` });
+              status.createEl("p", { text: `relay  ${settings.relayWs}` });
+              if (/127\.0\.0\.1|localhost/.test(settings.relayWs)) {
+                // The commonest pairing failure by a distance, and it reads as
+                // a broken code rather than an unreachable address.
+                status.createEl("p", {
+                  text:
+                    "That relay address means \"this machine\", so another device cannot reach it. " +
+                    "Put this machine's LAN address in the relay setting first.",
+                });
+              }
+              const line = status.createEl("p", { text: "Waiting for it to answer…" });
+              await grantAccount(
+                settings.relayWs,
+                code,
+                {
+                  accountSecret: settings.accountSecret,
+                  namespaceKey: settings.namespaceKey,
+                  namespace: settings.namespace,
+                  relayWs: settings.relayWs,
+                  relayHttp: settings.relayHttp,
+                  grantedBy: settings.deviceLabel,
+                },
+                parseAccountKey(settings.accountSecret),
+              );
+              line.setText("Done — that device now has this account.");
+            } catch (e) {
+              status.createEl("p", { text: `Pairing stopped: ${message(e)}` });
+            } finally {
+              b.setDisabled(false);
+            }
+          }),
+      );
+  }
+
+  private kitSetting(containerEl: HTMLElement, status: HTMLElement): void {
+    const settings = this.plugin.settings;
+    new Setting(containerEl)
+      .setName("Recovery kit")
+      .setDesc(
+        "The page to print for the day no device is left to pair with. There is no other copy of these keys and nobody can reissue them.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Show it").onClick(async () => {
+          status.empty();
+          try {
+            await ready();
+            const page = renderRecoveryKit(
+              settings.accountSecret,
+              settings.namespaceKey,
+              settings.namespace,
+              settings.deviceLabel,
+              today(),
+            );
+            // Shown in the settings pane rather than copied to the clipboard:
+            // a clipboard is exactly where these two keys should not go.
+            status.createEl("pre", { text: page, cls: "opensync-kit" });
+            // Read it straight back, so the page is proved parseable before
+            // anybody relies on it having been printed.
+            const check = readRecoveryKit(page) as { fingerprint: string };
+            status.createEl("p", {
+              text: `Reads back as account ${check.fingerprint}. Print this page.`,
+            });
+          } catch (e) {
+            status.createEl("p", { text: `Cannot render a kit: ${message(e)}` });
+          }
+        }),
+      );
+  }
+
+  /* ----------------------------------------------------------- options */
+
+  private optionsSection(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Syncing").setHeading();
 
     new Setting(containerEl)
       .setName("Device name")
@@ -1444,233 +1916,131 @@ class OpenSyncSettingTab extends PluginSettingTab {
       );
   }
 
-  /**
-   * Getting the keys onto this device, without them being typed.
-   *
-   * This sits above the key fields on purpose. Those fields are the escape
-   * hatch — the thing to do when pairing cannot work — and putting them first
-   * taught every new install to copy a vault key by hand, which is the one
-   * step where a mistake is silent and permanent.
-   */
-  private devicesSection(containerEl: HTMLElement): void {
-    const settings = this.plugin.settings;
-    const enrolled = Boolean(settings.accountSecret && settings.namespaceKey);
-    new Setting(containerEl).setName(enrolled ? "Your devices" : "Set up").setHeading();
-    const status = containerEl.createDiv({ cls: "opensync-pairing" });
-    for (const line of this.carry) status.createEl("p", { text: line });
-    this.carry = [];
-    // Rotation is irreversible and destroys access for every device that is
-    // not re-paired, so it takes two presses. Scoped to this render of the
-    // pane, which means closing settings and coming back is itself a way to
-    // change your mind.
-    let confirmed = false;
+  /* ---------------------------------------------------------- advanced */
 
-    if (!enrolled) {
-      let typed = "";
-      new Setting(containerEl)
-        .setName("Join from a code")
-        .setDesc(
-          "On a device that already has this account, ask for a pairing code — `opensync pair`, or the Add a device button in its settings. Paste the whole opensync://pair… line it shows, or type the ten characters and fill in the relay address below. The keys are never shown and never typed.",
-        )
-        .addText((t) => t.setPlaceholder("9x4k-tv2q8m, or opensync://pair…").onChange((v) => (typed = v)))
-        .addButton((b) =>
-          b
-            .setButtonText("Join")
-            .setCta()
-            .onClick(async () => {
-              status.empty();
-              if (!typed.trim()) {
-                status.setText("Type the code from the other device first.");
-                return;
-              }
-              // An invitation carries the relay with it, and wins over the
-              // field above: a device that has just been handed one is a
-              // device that was never told where the relay is, and a stale
-              // address left in the field is not what the person meant.
-              await ready();
-              let ws = settings.relayWs;
-              try {
-                ws = Invitation.parse(typed.trim()).relayWs;
-              } catch {
-                // Ten characters on their own. The relay has to come from
-                // somewhere, and on a fresh phone there is nothing there —
-                // which used to mean two minutes of asking nobody.
-              }
-              if (!ws) {
-                status.setText(
-                  "Fill in the relay address from the other device, or paste the whole opensync://pair… line it showed.",
-                );
-                return;
-              }
-              status.setText(`Asking ${ws} for that account…`);
-              try {
-                const granted = await joinAccount(ws, typed.trim());
-                const reachable = endpointsFor(ws, granted);
-                settings.accountSecret = granted.accountSecret;
-                settings.namespaceKey = granted.namespaceKey;
-                settings.namespace = granted.namespace;
-                settings.relayWs = reachable.ws;
-                settings.relayHttp = reachable.http;
-                await this.plugin.saveSettings();
-                new Notice(`Joined the account on ${granted.grantedBy} (${granted.accountId})`);
-                this.display();
-              } catch (e) {
-                status.setText(`Did not join: ${message(e)}`);
-              }
-            }),
-        );
+  /**
+   * The relay and the keys, typed by hand. Folded away, because each of
+   * these is the thing to reach for when nothing above can work — and the
+   * keys are masked until somebody presses the eye.
+   */
+  private advancedSection(containerEl: HTMLElement): void {
+    const settings = this.plugin.settings;
+    const nostr = settings.nostr;
+    const details = containerEl.createEl("details", { cls: "opensync-advanced" });
+    details.createEl("summary", { text: "Relay and keys (advanced)" });
+    // Open when the one thing nothing can work without is missing: a phone
+    // on a build with no hosted relay has an empty address and no other way
+    // to find the field.
+    if (!settings.relayWs) details.open = true;
+    // Two presses when there is a key to lose, matching the Rotate button
+    // rather than asking `window.confirm`. On mobile that dialog is not
+    // guaranteed to appear at all, and a blocked one reads as a button that
+    // silently does nothing — on the controls that decide whether a vault
+    // stays readable. Scoped to this render.
+    let replacingVault = false;
+    let replacingAccount = false;
+
+    new Setting(details)
+      .setName("Relay address")
+      .setDesc(
+        Platform.isMobile
+          ? "The address of the computer running your relay, on your network — not 127.0.0.1, which is this phone."
+          : "The WebSocket address of your relay. Point it anywhere — including a relay you run yourself.",
+      )
+      .addText((t) =>
+        t.setValue(settings.relayWs).onChange(async (v) => {
+          settings.relayWs = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(details)
+      .setName("Storage address")
+      .setDesc("Where file contents are stored. Usually the same host and port as the relay.")
+      .addText((t) =>
+        t.setValue(settings.relayHttp).onChange(async (v) => {
+          settings.relayHttp = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    let vaultInput: HTMLInputElement | null = null;
+    const vault = new Setting(details)
+      .setName("Vault key")
+      .setDesc(
+        nostr
+          ? "Starts ovault1. Sealed to your Nostr account on the relay, which is how your other devices get it; change it with Rotate above."
+          : "Starts ovault1. This is what encrypts everything before it leaves this device. Copy it to your other devices, and keep a copy somewhere safe — nobody, including us, can recover it for you.",
+      )
+      .addText((t) => {
+        vaultInput = t.inputEl;
+        masked(t)
+          .setPlaceholder("ovault1…")
+          .setValue(settings.namespaceKey)
+          .setDisabled(Boolean(nostr))
+          .onChange(async (v) => {
+            settings.namespaceKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    if (!nostr) {
+      vault.addButton((b) =>
+        b.setButtonText("Generate").onClick(async () => {
+          if (settings.namespaceKey && !replacingVault) {
+            replacingVault = true;
+            b.setButtonText("Generate — press again").setWarning();
+            new Notice(
+              "This replaces the vault key. Anything already synced under the old one becomes unreadable — press again to go ahead.",
+            );
+            return;
+          }
+          replacingVault = false;
+          settings.namespaceKey = Namespace.generateKey();
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    }
+    revealer(vault, () => vaultInput);
+
+    if (nostr) {
+      // The nsec is never put in a field, masked or not. Signing out is the
+      // way to change it.
+      new Setting(details)
+        .setName("Account key")
+        .setDesc("Your Nostr key, which you signed in with. It is not shown here; sign out to use a different one.");
       return;
     }
 
-    new Setting(containerEl)
-      .setName("Add a device")
-      .setDesc(
-        "Shows a ten-character code, good for one device and one attempt. The vault key is never displayed and never crosses the relay in a form the relay can read.",
-      )
+    let accountInput: HTMLInputElement | null = null;
+    const account = new Setting(details)
+      .setName("Account key")
+      .setDesc("Starts nsec1. This is a Nostr key and identifies you to the relay — it never sees your notes.")
+      .addText((t) => {
+        accountInput = t.inputEl;
+        masked(t)
+          .setValue(settings.accountSecret)
+          .onChange(async (v) => {
+            settings.accountSecret = v.trim();
+            await this.plugin.saveSettings();
+          });
+      })
       .addButton((b) =>
-        b
-          .setButtonText("Show a code")
-          .setCta()
-          .onClick(async () => {
-            b.setDisabled(true);
-            status.empty();
-            try {
-              await ready();
-              const code = PairingCode.generate();
-              const invitation = new Invitation(settings.relayWs, code);
-
-              // The QR first, because it carries the relay address — which is
-              // the half people mistype — and because a phone is the device
-              // most likely to be joining and the worst one to type on.
-              const canvas = status.createEl("canvas", { cls: "opensync-qr" });
-              drawInvitation(canvas, invitation, { moduleSize: 6 });
-
-              // Three ways to carry the same thing, because the right one
-              // depends on what the joining device is. A phone scans. A second
-              // computer, which cannot point a camera at this screen, gets one
-              // line to copy. Anything else reads ten characters aloud — and
-              // then needs the relay address too, which is the half that gets
-              // mistyped.
-              status.createEl("p", { text: "Scan that, paste this line on the other device:" });
-              status.createEl("p", { text: invitation.uri, cls: "opensync-invite" });
-              status.createEl("p", { text: "…or type both of these:" });
-              status.createEl("p", { text: `code   ${code.text}` });
-              status.createEl("p", { text: `relay  ${settings.relayWs}` });
-              if (/127\.0\.0\.1|localhost/.test(settings.relayWs)) {
-                // The commonest pairing failure by a distance, and it reads as
-                // a broken code rather than an unreachable address.
-                status.createEl("p", {
-                  text:
-                    "That relay address means \"this machine\", so another device cannot reach it. " +
-                    "Put this machine's LAN address in the relay setting first.",
-                });
-              }
-              const line = status.createEl("p", { text: "Waiting for it to answer…" });
-              await grantAccount(
-                settings.relayWs,
-                code,
-                {
-                  accountSecret: settings.accountSecret,
-                  namespaceKey: settings.namespaceKey,
-                  namespace: settings.namespace,
-                  relayWs: settings.relayWs,
-                  relayHttp: settings.relayHttp,
-                  grantedBy: settings.deviceLabel,
-                },
-                parseAccountKey(settings.accountSecret),
-              );
-              line.setText("Done — that device now has this account.");
-            } catch (e) {
-              status.createEl("p", { text: `Pairing stopped: ${message(e)}` });
-            } finally {
-              b.setDisabled(false);
-            }
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName("Rotate the vault key")
-      .setDesc(
-        "Re-seals this vault under a new key, so everything on the relay under the old one becomes unreadable. " +
-          "This is the only real delete there is: a relay may ignore a deletion request, and anything ever " +
-          "fetched was ever copied. Every device you keep must be paired again afterwards — there is no " +
-          "announcement, because one that reached your devices would reach the device you are rotating away from.",
-      )
-      .addButton((b) =>
-        b.setButtonText("Rotate").setWarning().onClick(async () => {
-          status.empty();
-
-          // One key covers every namespace on the account, and this plugin
-          // only re-seals its own. Saying so before the button is pressed
-          // rather than after is the difference between a warning and a
-          // post-mortem.
-          if (!confirmed) {
-            confirmed = true;
-            b.setButtonText("Rotate — press again");
-            status.createEl("p", {
-              text:
-                "This re-seals the vault only. If the same key also syncs a clipboard or a password store, " +
-                "rotate those from their own app first — this cannot reach them, and afterwards nothing can.",
-            });
-            status.createEl("p", {
-              text: "Every other device loses access until it is paired again. Press Rotate once more to go ahead.",
-            });
+        b.setButtonText("Generate").onClick(async () => {
+          if (settings.accountSecret && !replacingAccount) {
+            replacingAccount = true;
+            b.setButtonText("Generate — press again").setWarning();
+            new Notice(
+              "This replaces the account key. The vault on the relay under the old one is left behind — press again to go ahead.",
+            );
             return;
           }
-          confirmed = false;
-          b.setButtonText("Rotate").setDisabled(true);
-
-          const progress: string[] = [];
-          try {
-            const key = await this.plugin.rotate((line) => {
-              progress.push(line);
-              status.createEl("p", { text: line });
-            });
-            this.plugin.settings.namespaceKey = key;
-            await this.plugin.saveSettings();
-            // Handed to the next render rather than written here: `display()`
-            // is what puts the new key in its field, and it empties this box
-            // on the way.
-            this.carry = [...progress, 'Done. Use "Add a device" to pair each device you are keeping.'];
-            this.display();
-          } catch (e) {
-            status.createEl("p", { text: `Rotation stopped: ${message(e)}` });
-          } finally {
-            b.setDisabled(false);
-          }
+          replacingAccount = false;
+          settings.accountSecret = generateAccountKey();
+          await this.plugin.saveSettings();
+          this.display();
         }),
       );
-
-    new Setting(containerEl)
-      .setName("Recovery kit")
-      .setDesc(
-        "The page to print for the day no device is left to pair with. There is no other copy of these keys and nobody can reissue them.",
-      )
-      .addButton((b) =>
-        b.setButtonText("Show it").onClick(async () => {
-          status.empty();
-          try {
-            await ready();
-            const page = renderRecoveryKit(
-              settings.accountSecret,
-              settings.namespaceKey,
-              settings.namespace,
-              settings.deviceLabel,
-              today(),
-            );
-            // Shown in the settings pane rather than copied to the clipboard:
-            // a clipboard is exactly where these two keys should not go.
-            status.createEl("pre", { text: page, cls: "opensync-kit" });
-            // Read it straight back, so the page is proved parseable before
-            // anybody relies on it having been printed.
-            const check = readRecoveryKit(page) as { fingerprint: string };
-            status.createEl("p", {
-              text: `Reads back as account ${check.fingerprint}. Print this page.`,
-            });
-          } catch (e) {
-            status.createEl("p", { text: `Cannot render a kit: ${message(e)}` });
-          }
-        }),
-      );
+    revealer(account, () => accountInput);
   }
 }
