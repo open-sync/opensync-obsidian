@@ -80,7 +80,7 @@ so it stores nothing for an account nobody has admitted. Generate the keys,
 take the npub off the recovery kit, and on the relay's host:
 
 ```sh
-opensync-relay relay.toml admit npub1… "darius, android"
+opensync-relay relay.toml admit npub1… "maintainer, android"
 ```
 
 Until that happens syncing fails, and it fails looking like a quota error —
