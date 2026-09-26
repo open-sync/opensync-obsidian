@@ -389,6 +389,16 @@ try {
 
   // A restart reads the key back out of wherever it was kept.
   C = await env.restart(C);
+  // A new window, so the override has to be set again before anything asks
+  // the account server — first at a dead port, which is a path worth driving
+  // too, and never the production host.
+  await C.eval(() => (window.opensyncAccountsBase = "http://127.0.0.1:9"));
+  await C.openSettings();
+  await sleep(3000);
+  const unreachable = await paneText(C);
+  ok(/account server unreachable/.test(unreachable), "an unreachable account server is said on the pane, which stays responsive");
+  await C.closeSettings();
+  await C.eval((b) => (window.opensyncAccountsBase = b), base ?? "http://127.0.0.1:9");
   const cAfter = await C.settings();
   ok(cAfter.accountSecret === nsec && cAfter.nostr?.kind === "key", "the Nostr sign-in survives a restart");
   const cAgain = await C.sync();

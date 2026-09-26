@@ -6,7 +6,7 @@ cannot read a note, a filename, or a folder. Notes sync free and unlimited.
 Attachments are the paid tier — or free forever on a relay you run yourself.
 
 > **Status: not yet in the community plugin directory.** It is verified working
-> inside Obsidian 1.13.7 by 91 automated assertions that drive the real
+> inside Obsidian 1.13.7 by 116 automated assertions that drive the real
 > application, but it has not been reviewed by Obsidian staff and has not been
 > tested on a phone. See [Status](#status).
 
@@ -56,20 +56,45 @@ Settings → Community plugins.
 
 ## Start syncing
 
-### The first device
+**Settings → OpenSync.** A device with nothing set up offers every way in, in
+this order. A device that already has an account shows that account instead,
+and never offers to make a new one over it.
 
-1. **Settings → OpenSync.**
-2. Press **Generate** beside *Vault key*, then beside *Account key*. The relay
-   address is already filled in.
-3. Press **Recovery kit → Show it**, and print the page. Do this now rather
-   than later — see [If you lose everything](#if-you-lose-everything).
+### Sign in with Nostr
 
-That is the whole setup. The status bar reads *OpenSync: up to date* when the
-vault has been published.
+Your Nostr key is your OpenSync account. Paste your `nsec` into *Sign in with
+Nostr* and press **Sign in** — or, to keep the key off this device, paste the
+`bunker://` address from **nsec.app**, **Amber** or any other NIP-46 remote
+signer instead, and approve the connection there.
 
-### The second device
+- **The first device** finds no vault for that key, makes one, and seals the
+  vault key to your npub on the relay (NIP-44, to yourself).
+- **Every other device** signs in with the same key and finds that sealed
+  vault key. There is nothing to pair and nothing to copy.
+- **A device that already synced with keys of its own** can move across with
+  *Move to a Nostr sign-in* (two presses). If the account has no vault yet,
+  this device's vault becomes it; if it has one, what this vault holds is
+  merged into it on the next sync. Nothing is deleted.
 
-On the device that already has the account: **Add a device → Show a code.**
+The key is never shown — the field is masked and nothing writes it back. On
+Obsidian 1.11.4 and later it is kept in Obsidian's secret storage rather than
+in the plugin's `data.json`; on older versions it is in `data.json`, as every
+other key here always has been. A remote signer's key never reaches this
+device at all.
+
+The same key also signs you in to your **OpenApps account**
+(`auth.opensync.network`) — a signed challenge, no password. That server is
+new; if it cannot be reached, sync is set up anyway and the pane says so, with
+a **Connect** button to try again later.
+
+Signed in, the pane shows the npub you sync as, your OpenApps account, the
+sync status, and **Sign out** (two presses; it removes the keys and the
+session from this device — the notes stay, and so does your vault on the
+relay).
+
+### Join from a code
+
+On a device that already has the account: **Add a device → Show a code.**
 
 You get three ways to carry the same pairing, and they are for different
 situations:
@@ -88,6 +113,24 @@ middle carries ciphertext and somebody watching the wire at that exact moment
 gets one guess. A code is spent when it is answered — right or wrong — which is
 what lets it be short enough to read down a phone line.
 
+An account signed in with Nostr does not need codes: sign in on the other
+device with the same key.
+
+### An account link or a recovery kit
+
+*Join from a code* also takes an `opensync://account…` link or a pasted
+recovery kit. Both carry the whole account, so the field is masked. A kit
+carries no relay address; the one under *Relay and keys* is used.
+
+### Relay and keys, by hand
+
+Folded away under **Relay and keys (advanced)**: the relay and storage
+addresses, and the vault and account keys, masked until you press the eye. To
+start an account with keys of its own rather than a Nostr key, press
+**Generate** beside *Vault key*, then beside *Account key*, and then print the
+**Recovery kit** — see [If you lose everything](#if-you-lose-everything).
+Replacing a key that is already there takes two presses.
+
 ## What happens when two devices disagree
 
 Nothing is lost. Ever. That is the one rule everything else bends around.
@@ -103,7 +146,11 @@ second, and a lost edit is gone.
 
 ## If you lose everything
 
-There is no password reset, because there is no password and we hold no key.
+**Signed in with Nostr:** your Nostr key is the way back. Sign in with it on
+any device and the vault key comes with it. Keep the `nsec` backed up wherever
+you keep it safe; the plugin never shows it and prints no kit for it.
+
+**With keys of its own:** there is no password reset, because there is no password and we hold no key.
 If every device is lost, the only way back into the vault is the **recovery
 kit** — a page you print, carrying both keys grouped for typing, each with a
 checksum, and bound together by a fingerprint so two pages cannot be mixed into
@@ -119,7 +166,9 @@ what the old one addressed, after which anything left on a relay is ciphertext
 nobody holds a key for. This is the only real delete a system like this has: a
 relay may ignore a deletion request, and anything ever fetched was ever copied.
 
-It costs pairing every device you are keeping, and it always costs that. There
+It costs pairing every device you are keeping, and it always costs that. On
+an account signed in with Nostr the new key is sealed to your npub on the
+relay, so the cost is signing out and back in on each device instead. There
 is no announcement, because a notice that reached your devices would reach the
 one you are rotating away from.
 
@@ -173,7 +222,7 @@ More in [docs/security.md](docs/security.md).
 
 ## Status
 
-Verified inside **Obsidian 1.13.7** on macOS by 91 automated assertions that
+Verified inside **Obsidian 1.13.7** on macOS by 116 automated assertions that
 drive two real copies of the application over the remote debugger — pairing,
 rotation, the recovery kit, conflict handling, 504 files published in 2.8 s and
 fetched in 1.5 s, and zero plaintext in the relay's own storage.
@@ -183,6 +232,12 @@ Not yet done, and honest about it:
 - **Not tested on a phone.** The manifest claims mobile support and the code
   has mobile-specific paths, but nothing has run there yet.
 - **Not reviewed by Obsidian staff**, and not in the community directory.
+- **Remote signers (NIP-46) are not covered by the checks.** Signing in with
+  an nsec is driven end to end; a `bunker://` connection uses the same code
+  path after the signer is opened, but no check runs a bunker yet.
+- **The OpenApps account server is not live yet.** Signing in to it is checked
+  against a local copy of the server; until `auth.opensync.network` answers,
+  the pane says the account server is unreachable and sync works regardless.
 - **No version history.** A superseded version of a note is not kept.
 - **A rename is a delete and a create**, so moving a large folder republishes
   everything in it. Correct, and expensive.
@@ -234,6 +289,12 @@ cargo build --release -p opensync-relay --manifest-path ../opensync/Cargo.toml
 npm run check:all
 ```
 
+`check:obsidian` also signs in to a local OpenApps account server when one is
+built at `../target/debug/openapps-server` (or wherever `OPENAPPS_SERVER`
+points), on its own port and database; without one, it checks that an
+unreachable account server does not stop the sign-in. Only a check build
+(`OPENSYNC_CHECK_BUILD=1`) can point the plugin at another account server.
+
 Three suites, all of which drive the real application rather than standing in
 for it. Each starts its own relay on a port the OS hands out, builds vaults
 under a temporary directory, and gives each Obsidian its own
@@ -242,7 +303,7 @@ while it is open is fine.
 
 | Check | What it covers |
 |---|---|
-| `check:obsidian` | loading, the settings pane, pairing, edits, attachments, deletes, conflicts, restart persistence, rotation |
+| `check:obsidian` | loading, the settings pane, pairing, edits, attachments, deletes, conflicts, restart persistence, rotation, and signing in with a throwaway Nostr key — create, join, move from own keys, re-seal after rotation, sign out, secret storage |
 | `check:tiers` | the free and paid plans, and every path where one could delete the other's files |
 | `check:hosted` | the shipping default over real TLS, with the hostname mapped inside the browser |
 

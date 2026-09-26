@@ -887,7 +887,7 @@ async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  if (failure !== null) throw failure instanceof Error ? failure : new Error(String(failure));
+  if (failure !== null) throw failure instanceof Error ? failure : new Error(typeof failure === "string" ? failure : "a parallel task failed");
 }
 
 function concat(parts: Uint8Array[]): Uint8Array {

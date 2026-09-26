@@ -13,7 +13,7 @@
     "account.ts": "d74340d632e5b54e",
     "signer.ts": "53a32a1447ba66b6",
     "nip44.ts": "7a32db54de82f5f9",
-    "vault.ts": "5a6ef53eb7b953dc",
+    "vault.ts": "3c18c93e04e867a5",
     "wasm/inline.ts": "124ef9cef428c3d3",
     "wasm/opensync_wasm.js": "29585d84ea3364e5",
     "wasm/opensync_wasm.d.ts": "2f3edf30d5098f91"

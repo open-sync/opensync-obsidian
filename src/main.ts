@@ -1527,12 +1527,17 @@ class OpenSyncSettingTab extends PluginSettingTab {
         );
       } else {
         account.setDesc(named || "Checking…");
+        // Braces on both handlers, never an expression body: a `Setting` has
+        // a `then` method, so returning one from a handler makes it a
+        // thenable the promise machinery calls forever — and Obsidian hangs.
         plugin.refreshAccount().then(
           (me) => {
             if (me) account.setDesc(`${me.name} (${me.id})`);
             else this.display();
           },
-          () => account.setDesc(`${named ? `${named} — ` : ""}account server unreachable. Sync works without it.`),
+          () => {
+            account.setDesc(`${named ? `${named} — ` : ""}account server unreachable. Sync works without it.`);
+          },
         );
       }
     }
